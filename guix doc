@@ -1,0 +1,2878 @@
+---
+
+# GNU Guix Build Systems: The Complete Reference (Updated for Guix 1.5.0 — Released January 23, 2026)
+
+## Table of Contents
+
+1. The `package` Record and Every Field
+2. The `origin` Record and Every Field
+3. Inputs in All Their Forms
+4. Build Systems
+    - 4.1 `gnu-build-system`
+    - 4.2 `python-build-system` (Deprecated)
+    - 4.3 `pyproject-build-system` (Now Primary)
+    - 4.4 `cmake-build-system`
+    - 4.5 `meson-build-system`
+    - 4.6 `trivial-build-system`
+    - 4.7 `copy-build-system`
+    - 4.8 `ant-build-system`
+    - 4.9 `maven-build-system`
+    - 4.10 `android-ndk-build-system`
+    - 4.11 `asdf-build-system`
+    - 4.12 `cargo-build-system` (with expanded crate handling)
+    - 4.13 `dune-build-system`
+    - 4.14 `emacs-build-system`
+    - 4.15 `font-build-system`
+    - 4.16 `go-build-system`
+    - 4.17 `haskell-build-system`
+    - 4.18 `node-build-system` (Enhanced)
+    - 4.19 `ocaml-build-system`
+    - 4.20 `perl-build-system`
+    - 4.21 `qt-build-system`
+    - 4.22 `r-build-system`
+    - 4.23 `ruby-build-system`
+    - 4.24 `scons-build-system`
+    - 4.25 `texlive-build-system`
+    - 4.26 `waf-build-system`
+    - 4.27 `zig-build-system` (New)
+    - 4.28 `julia-build-system` (New)
+    - 4.29 `rakudo-build-system` (New)
+    - 4.30 `composer-build-system` (New)
+    - 4.31 `dub-build-system` (New)
+    - 4.32 Additional Build Systems
+        - `agda-build-system`
+        - `chicken-build-system`
+        - `elm-build-system`
+        - `guile-build-system`
+        - `linux-module-build-system`
+        - `tree-sitter-build-system`
+        - `channel-build-system`
+        - `renpy-build-system`
+5. Arguments, Phases, and the Standard Build Lifecycle
+6. G-Expressions
+7. Search Paths and Environment Variables
+8. Python Bootstrapping
+9. Java Bootstrapping
+10. FHS Avoidance: Every Phase, Patch, and Technique
+11. Package Variants, Inheritance, and Transformations
+12. Grafts and Security Updates
+13. Writing Custom Build Systems
+14. Advanced G-Expressions and Build Utilities
+15. Linting, Styling, and Quality Assurance
+16. Manifests, Profiles, and Channels
+17. Importers, Pack, and Deploy
+18. Package Module Architecture and Circular Dependencies
+19. Reproducibility and Build Tuning
+20. Debugging Build Failures (New)
+21. Cross-Compilation Deep Dive (New)
+22. Performance Tuning (New)
+23. Security Hardening (New)
+24. Appendix A: Complete Advanced Package Example
+25. Appendix B: Glossary
+
+
+## 1. The `package` Record and Every Field
+
+A package is an instance of the `package` record type defined in `(guix packages)`. The `package` macro is a constructor with named fields, each validated at definition time.
+
+### 1.1 `name`
+
+A string. Must be lowercase, dash-separated. This is the package name, not the file name.
+
+```scheme
+(name "hello")
+```
+
+### 1.2 `version`
+
+A string. Must not contain a slash or colon. For git snapshots, use `"1.2.3-1.abcdef0"` where `1.2.3` is the last release, `1` is the number of commits since, and `abcdef0` is the abbreviated commit hash.
+
+```scheme
+(version "2.10")
+```
+
+### 1.3 `source`
+
+An `<origin>` record (see Section 2), or `#f` for packages with no source.
+
+### 1.4 `build-system`
+
+A build system procedure such as `gnu-build-system`, `pyproject-build-system`, etc.
+
+### 1.5 `arguments`
+
+A list of keyword arguments passed to the build system. Since Guix 1.3.0, the preferred style uses `list` and G-expressions. The `guix style` command can rewrite old-style quoted arguments to use G-expressions:
+
+```bash
+guix style -S arguments=package
+```
+
+The manual provides this example:
+
+```scheme
+(arguments
+ (list #:tests? #f                          ;skip tests
+       #:make-flags #~'("VERBOSE=1")        ;pass flags to 'make'
+       #:configure-flags #~'("--enable-frobbing")))
+```
+
+The exact set of supported keywords depends on the build system, but almost all honor `#:configure-flags`, `#:make-flags`, `#:tests?`, and `#:phases`.
+
+### 1.6 `inputs`
+
+A list of packages needed at build time and run time. In the modern style, a plain list of package values. Until version 1.3.0, input lists were a list of tuples with string labels.
+
+```scheme
+(inputs (list libffi libunistring `(,glib "bin")))
+```
+
+**Important note on labels**: In the new style, labels are derived from the variable name automatically. For example, if you use a variable like `gnu-gettext`, the label will be `"gnu-gettext"`, not `"gettext"` — even though the package's `name` field is `"gettext"`. This is because the label is derived from the Scheme variable binding, not the package's `name` field. The `search-input-file` procedure uses these labels to locate inputs.
+
+### 1.7 `native-inputs`
+
+Packages needed only to build the package (on the build machine), not needed at run time. The Guix manual states: "`native-inputs` is typically used to list tools needed at build time, but not at run time, such as Autoconf, Automake, pkg-config, Gettext, or Bison".
+
+```scheme
+(native-inputs (list pkg-config gettext))
+```
+
+### 1.8 `propagated-inputs`
+
+Packages that become dependencies of any package depending on this one. Used for languages where the runtime needs to see a dependency's files. These are added to the consumer's environment via search paths.
+
+### 1.9 `outputs`
+
+A list of output names. The default is `'("out")`. Multiple outputs split a package into separately-referenced store items.
+
+```scheme
+(outputs '("out" "lib" "doc"))
+```
+
+By convention: `out` (main), `lib` (shared libraries), `bin` (executables), `include` (C headers), `doc` (documentation), `debug` (debug symbols), `static` (static libraries), `python` (Python bindings).
+
+### 1.10 `native-search-paths`
+
+A list of `search-path-specification` records that describe environment variables to set when this package is in the native (build-machine) environment.
+
+### 1.11 `search-paths`
+
+A list of `search-path-specification` records describing environment variables to set when this package is in the target environment. The record has these fields:
+
+- **`variable`**: The name of the environment variable (a string).
+- **`files`**: The list of sub-directories (strings) that should be added to the search path.
+- **`separator`** (default `":"`): The string used to separate search path components. A separator value of `#f` specifies a "single-component search path" — useful for variables such as `SSL_CERT_DIR`. The Guix source confirms the separator is documented as `string | #f`.
+- **`file-type`** (default `'directory`): The type of file being matched. This can be any symbol returned by `stat:type`, with `'directory` and `'regular` being the most common values.
+- **`file-pattern`** (default `#f`): Either `#f` or a regular expression specifying files to be matched.
+
+```scheme
+;; Correct: single-component path for SSL_CERT_DIR
+(search-path-specification
+ (variable "SSL_CERT_DIR")
+ (separator #f)
+ (files '("etc/ssl/certs")))
+
+;; Correct: multi-component path for PYTHONPATH
+(search-path-specification
+ (variable "PYTHONPATH")
+ (files '("lib/python3.11/site-packages")))
+```
+
+### 1.12 `location`
+
+The file and line number where the package is defined. This field is automatically populated by the `define-public` or `package` macro and is used by `guix lint` and error messages. It is not meant to be set manually.
+
+### 1.13 `synopsis`
+
+A short one-line description of the package. Should not start with an article ("a", "the") or end with a period. Used by `guix package --search`.
+
+### 1.14 `description`
+
+A longer description of the package. Should be a complete sentence or paragraph. Displayed by `guix show`.
+
+### 1.15 `home-page`
+
+A string containing the URL of the package's home page. If `#f`, the package is assumed to have no home page.
+
+### 1.16 `license`
+
+A license object or list of license objects from `(guix licenses)`. Common values: `license:gpl3+`, `license:lgpl3+`, `license:mit`, `license:bsd-3`, `license:asl2.0`. Can also be `license:gpl2+`, etc.
+
+### 1.17 `properties`
+
+An association list of arbitrary properties. Well-known properties include:
+
+- `upstream-name`: The name used by the upstream project (if different from the Guix name).
+- `release-monitoring-url`: URL for release monitoring.
+- `max-silent-time`: Maximum seconds without output before build is killed.
+- `cpe-name`: CPE name for CVE checking.
+- `tunable?`: Mark the package as eligible for CPU-specific optimization via `--tune` (see Section 22).
+
+### 1.18 `replacements`
+
+A list of packages that can replace this one in grafts. Used for security updates (see Section 12).
+
+### 1.19 `hidden?`
+
+A boolean. If `#t`, the package is hidden from `guix package --list-available` and other UI commands, but can still be used as a dependency.
+
+### 1.20 `supported-systems`
+
+A list of system tuples (e.g., `'("x86_64-linux" "aarch64-linux")`) that this package supports. If `#f` or omitted, all systems are supported.
+
+### 1.21 `deprecated?`
+
+A boolean or a package. If `#t`, the package is marked as deprecated. If a package, the package is deprecated in favor of that package.
+
+
+## 2. The `origin` Record and Every Field
+
+An `<origin>` describes how to obtain the source code.
+
+### 2.1 `uri`
+
+A string or list of strings. If a list, they are tried in order.
+
+### 2.2 `method`
+
+A monadic procedure that performs the fetch. Standard methods: `url-fetch`, `git-fetch`, `hg-fetch`, `svn-fetch`, `bzr-fetch`, `cvs-fetch`. Note that `local-file`, `computed-file`, and `interned-file` are file-like objects, not fetch methods; they are used to refer to local files or generated files and are described in the G-expressions section of the manual.
+
+### 2.3 `sha256`
+
+A base32-encoded SHA-256 hash of the fetched content.
+
+### 2.4 `file-name`
+
+An optional file name for the fetched content. Default is `#f`; recommended for VCS checkouts.
+
+### 2.5 `patches`
+
+A list of file names (usually from `search-patches`) to apply to the source. The list must be unconditional and cannot depend on `%current-system`.
+
+### 2.6 `patch-flags`
+
+Flags passed to `patch`. Default `'("-p1")`.
+
+### 2.7 `snippet`
+
+A Scheme expression (a G-expression) that modifies the source tree in place. Runs after patches are applied.
+
+### 2.8 `modules`
+
+A list of Guile modules needed by the snippet.
+
+### 2.9 `git-reference` for `git-fetch`
+
+When using `git-fetch`, the `uri` field holds a `git-reference` record with fields: `url`, `commit`, `branch`, `tag`, `recursive?`.
+
+```scheme
+(origin
+  (method git-fetch)
+  (uri (git-reference
+        (url "https://github.com/example/foo")
+        (commit version)
+        (recursive? #t)))
+  (file-name (git-file-name "foo" version))
+  (sha256 (base32 "...")))
+```
+
+
+## 3. Inputs in All Their Forms
+
+### 3.1 Old Style (Labelled)
+
+Before 1.3.0, inputs were an association list with string keys:
+
+```scheme
+(inputs `(("gawk" ,gawk)
+          ("gettext" ,gnu-gettext)
+          ("pkg-config" ,pkg-config)))
+```
+
+The labels matter only if you need to refer to the input in build-side code. The `%build-inputs` variable in phases is an alist mapping labels to store paths.
+
+### 3.2 New Style (List)
+
+Since 1.3.0, inputs are a plain list. Labels are derived from the variable name automatically:
+
+```scheme
+(inputs (list gawk gettext pkg-config))
+```
+
+Note: `gettext` is the variable name (the package's `name` field is also `"gettext"`). To refer to an input in a phase, use `search-input-file`:
+
+```scheme
+(lambda* (#:key inputs #:allow-other-keys)
+  (let ((gawk (search-input-file inputs "/bin/gawk")))
+    ...))
+```
+
+### 3.3 `modify-inputs`
+
+The `modify-inputs` macro is used to add, remove, or replace inputs when inheriting from a package. It accepts the following clauses:
+
+- `(delete name...)`: Delete from the inputs packages with the given names (strings).
+- `(prepend package...)`: Add packages to the front of the input list.
+- `(append package...)`: Add packages to the end of the input list.
+- `(replace name replacement)`: Replace the named package with `replacement`. This clause is documented in the Guix manual, which provides the example `(modify-inputs (package-inputs guile-redis) (replace "guile" guile-2.2))`.
+
+It works on any of `package-inputs`, `package-native-inputs`, `package-propagated-inputs`.
+
+### 3.4 `native-inputs`
+
+Build-machine dependencies. On a native build, `native-inputs` and `inputs` are both available. On a cross-build, `native-inputs` are built for the host and `inputs` for the target.
+
+### 3.5 `propagated-inputs`
+
+These become dependencies of any package that depends on this one. Used when the runtime needs to see the files. They are added to the consumer's environment via `search-paths`.
+
+### 3.6 Implicit Inputs
+
+Each build system adds implicit inputs. For `gnu-build-system`, the implicit inputs are derived from `%final-inputs` in `(gnu packages commencement)`. They include:
+
+- **Core utilities**: tar, gzip, bzip2, xz, file, diffutils, patch, findutils, gawk, sed, grep, coreutils, make, bash.
+- **Toolchain**: ld-wrapper, binutils, gcc, libc, libc:static, locales.
+
+Note that tools such as pkg-config, autoconf, automake, libtool, gettext, bison, perl, and python are **not** implicit inputs. They must be explicitly added to a package's `native-inputs` when required.
+
+To suppress implicit inputs (used during bootstrapping), pass `#:implicit-inputs? #f`.
+
+---
+
+## 4. Build Systems
+
+Build systems in Guix are `<build-system>` records that encapsulate the procedure for building a package, including implicit dependencies and the sequence of build phases. Under the hood, they compile package objects to **bags**, a lower-level representation that includes all inputs (including implicit ones), which is then compiled to a derivation.
+
+The main build system is `gnu-build-system`, and most other build systems inherit from it, differing mainly in the set of implicit inputs and the list of phases executed.
+
+**The Universal Porting Pattern.** Every build system described below follows the same three-step pattern. To replicate any of them in another programming language, you need to implement:
+
+1. **A build-system type** with a `lower` method that merges implicit inputs with the package's explicit inputs and produces a bag.
+2. **A phase execution engine** that runs an ordered list of named `(phase-name, function)` pairs, passing a context object containing outputs, inputs, arguments, and the source directory.
+3. **A phase modification mechanism** that allows adding, removing, replacing, or reordering phases based on the `#:phases` argument.
+
+The `lower` method is a pure function from package metadata to a build plan. It is not Scheme-specific. In Python, it could be `lower(name, source, arguments, inputs) -> Bag`. In JavaScript, a function returning a plain object. The bag is just a data structure with fields like `name`, `system`, `build_inputs`, `arguments`, and a `build` procedure.
+
+Once you have these three pieces, you can define any build system by composing them. The sections below describe each build system's implicit inputs and phase customizations — the two pieces of information you need to port it.
+
+
+### 4.1 `gnu-build-system`
+
+The `gnu-build-system` implements the standard GNU build procedure: `./configure && make && make check && make install`. It ensures the "standard" environment for GNU packages is available, including tools such as GCC, libc, Coreutils, Bash, Make, Diffutils, grep, and sed. These are called **implicit inputs** because package definitions do not need to mention them explicitly.
+
+**Implicit Inputs**: tar, gzip, bzip2, xz, file, diffutils, patch, findutils, gawk, sed, grep, coreutils, make, bash, ld-wrapper, binutils, gcc, libc, libc:static, locales.
+
+**Standard Phases** (`%standard-phases`): set-SOURCE-DATE-EPOCH, set-paths, install-locale, unpack, bootstrap, patch-usr-bin-file, patch-source-shebangs, configure, patch-generated-file-shebangs, build, check, install, patch-shebangs, strip, validate-runpath, validate-documentation-location, delete-info-dir-file, patch-dot-desktop-files, make-dynamic-linker-cache, install-license-files, reset-gzip-timestamps, compress-documentation.
+
+The `make-dynamic-linker-cache` phase was added in a commit dated 2020-12-01 by Ludovic Courtès. This phase is present in the `%standard-phases` list and is a critical part of the build process for creating a functional `ld.so.cache`. **Important caveat**: On `i686-linux`, this phase can cause the build daemon to run out of memory (OOM) with certain packages (e.g., LLVM 15 and later). In such cases, the phase must be deleted via `(delete 'make-dynamic-linker-cache)`.
+
+**Common Keyword Arguments**: `#:configure-flags`, `#:make-flags`, `#:tests?`, `#:test-target`, `#:parallel-build?`, `#:parallel-tests?`, `#:out-of-source?`, `#:strip-binaries?`, `#:validate-runpath?`, `#:substitutable?`, `#:implicit-inputs?`, `#:guile`, `#:make-dynamic-linker-cache?`.
+
+**Additional Arguments**: `#:allowed-references` and `#:disabled-references` — when true, these must be a list of dependencies that must not appear among the references of the build results. If some references are retained, the build fails, which is useful to ensure a package does not erroneously keep a reference to a build-time input.
+
+**Module**: `(guix build-system gnu)`
+
+#### Porting `gnu-build-system`
+
+The `gnu-build-system` is the foundation. To port it, you need a build-system object whose `lower` method adds the implicit inputs listed above to the package's inputs, and whose phase list is the full `%standard-phases` list. The phase functions themselves are ordinary procedures that manipulate files in the source and output directories. In a port:
+
+- **Context object**: Each phase receives a context with `outputs` (a map from output name to store path), `inputs` (a map from input name to store path), `arguments` (the keyword arguments), and `source` (the unpacked source directory).
+- **Phase execution**: Iterate over the phase list in order. For each phase, check whether the `#:phases` argument modifies it (delete, replace, add-before, add-after), and if not, call the base phase.
+- **Implicit inputs**: These are just packages (or store paths in a port) that are merged into the input map before any phase runs.
+
+A minimal Python-like pseudocode for the `lower` method:
+
+```python
+def lower(name, source, arguments, inputs):
+    all_inputs = dict(inputs)
+    for implicit in GNU_IMPLICIT_INPUTS:
+        all_inputs[implicit.name] = implicit.path
+    return Bag(name=name, system=current_system(),
+               build_inputs=all_inputs, arguments=arguments,
+               build=lambda bag: run_phases(GNU_PHASES, bag))
+```
+
+
+### 4.2 `python-build-system` (Deprecated)
+
+**Important:** As of the current Guix documentation, `python-build-system` is **deprecated**. It corresponds to the pre-PEP517 way of building Python packages using the informally specified `setup.py` file. The standard build system for Python packages is now `pyproject-build-system`. Nearly all packages in Guix have been migrated. `python-build-system` will eventually be removed, and `pyproject-build-system` will be **renamed** to `python-build-system` after its removal. As of Guix 1.5.0, this build system remains separate from `python-build-system`; the rename is planned, and `python-build-system` has been deprecated in favor of `pyproject-build-system`.
+
+**Historical Description**: It implements the more or less standard build procedure used by Python packages, which consists in running `python setup.py build` and then `python setup.py install --prefix=/gnu/store/...`. For packages that install stand-alone Python programs under `bin/`, it wraps these programs so that their `GUIX_PYTHONPATH` environment variable points to all the Python libraries they depend on. Which Python package is used to perform the build can be specified with the `#:python` parameter.
+
+By default, Guix calls `setup.py` under control of `setuptools`, much like `pip` does. Some packages are not compatible with `setuptools` (and `pip`), so you can disable this by setting the `#:use-setuptools?` parameter to `#f`. If a `"python"` output is available, the package is installed into it instead of the default `"out"` output.
+
+**Phase Order Note**: In current Guix, the `check` phase occurs **after** the `install` phase. This change was made to fix a reproducibility issue where the bytecode produced by running tests would interfere with the result of the install phase byte compilation. The phase order was briefly reverted in October 2020 and then re-applied; the current state is that `check` occurs after `install`.
+
+**Phases**: set-SOURCE-DATE-EPOCH, set-paths, install-locale, unpack, ensure-no-mtimes-pre-1980, enable-bytecode-determinism, check-setup, configure, build, install, check, wrap, rename-pth-file, strip, validate-runpath, validate-documentation-location, delete-info-dir-file, install-license-files, reset-gzip-timestamps, compress-documentation.
+
+The `rename-pth-file` phase is added before `strip` in the phase list. The `install-license-files` phase is inherited from `gnu-build-system`.
+
+**Module**: `(guix build-system python)`
+
+#### Porting `python-build-system`
+
+This build system inherits from `gnu-build-system` and replaces the `configure`, `build`, `install`, and `check` phases with Python-specific invocations. To port it:
+
+- **Implicit inputs**: Python, setuptools, pip (historically). The `#:python` argument overrides which Python is used.
+- **Phase overrides**: The `configure` phase runs `python setup.py --no-user-cfg`, the `build` phase runs `python setup.py build`, the `install` phase runs `python setup.py install --prefix=...`, and the `check` phase runs `python setup.py test` (or `pytest`).
+- **Wrap phase**: After installation, wrap scripts in `bin/` to set `GUIX_PYTHONPATH` to the site-packages directories of all propagated Python inputs.
+- **rename-pth-file phase**: Rename `easy-install.pth` to `NAME.pth` to avoid conflicts between packages.
+
+In a port, you would define a build system that inherits the phase list from `gnu-build-system`, replaces the relevant phases, and adds the Python-specific wrap and rename phases.
+
+
+### 4.3 `pyproject-build-system` (Now Primary)
+
+This is a variable exported by `(guix build-system pyproject)`. It is based on `python-build-system` and adds support for `pyproject.toml` and PEP 517. It also supports a variety of build backends and test frameworks. It is considered "experimental" in that the implementation details are not set in stone yet, however users are encouraged to try it for new Python projects (even those using `setup.py`). The API is subject to change, but any breaking changes in the Guix channel will be dealt with.
+
+**2025 Status**: `pyproject-build-system` is now the **primary and recommended** build system for virtually all Python packages. Migration is ongoing, with many packages being switched over to it. The Guix Python team has been actively migrating packages throughout 2025, and nearly all packages in Guix have been migrated.
+
+The API is slightly different from `python-build-system`:
+
+- `#:use-setuptools?` and `#:test-target` are removed.
+- `#:configure-flags` is changed. Instead of a list, this option must be a JSON object, whose interpretation depends on the build backend. The value should be written using Guile's `@` reader syntax. For example, the example from PEP 517 should be written as `'(@@ ("CC" "gcc") ("--global-option" ("--some-global-option")))`.
+- `#:backend-path` is added. It defaults to `#false`, but when set to a list it will be appended to Python's search path and overrides the definition in `pyproject.toml`.
+- `#:build-backend` is added. It defaults to `#false` and will try to guess the appropriate backend based on `pyproject.toml`.
+- `#:test-backend` is added. It defaults to `#false` and will guess an appropriate test backend based on what is available in package inputs.
+- `#:test-flags` is added. The default is `'()`. These flags are passed as arguments to the test command.
+
+**Deprecation and Renaming Note**: The Guix project has clarified that the plan is to **rename** `pyproject-build-system` to `python-build-system` after the old one is removed.
+
+**Module**: `(guix build-system pyproject)`
+
+#### Porting `pyproject-build-system`
+
+This is the modern Python build system. To port it:
+
+- **Implicit inputs**: Python (specifically `python-sans-pip-wrapper`), and a build backend (setuptools, flit, hatchling, poetry, etc.). The `#:build-backend` argument overrides the backend.
+- **Phase logic**: The `configure` phase determines the build backend from `pyproject.toml` (or the `#:build-backend` argument). The `build` phase invokes the backend's `build_wheel` hook (PEP 517). The `install` phase installs the built wheel. The `check` phase runs the test backend (pytest, unittest, etc.).
+- **Build isolation avoidance**: The build system passes `--no-build-isolation` by default to prevent the backend from downloading dependencies. This is critical for reproducibility.
+
+In a port, you would implement a phase that calls `python -m build --no-isolation` or directly invokes the PEP 517 hooks. The test phase would call `pytest` or `unittest` with the `#:test-flags`.
+
+
+### 4.4 `cmake-build-system`
+
+This variable is exported by `(guix build-system cmake)`. It implements the build procedure for packages using the CMake build tool. It automatically adds the `cmake` package to the set of inputs. It is based on `gnu-build-system`, but with the `configure` and `build` phases replaced by CMake-specific invocations.
+
+**Module**: `(guix build-system cmake)`
+
+#### Porting `cmake-build-system`
+
+- **Implicit inputs**: CMake, and optionally Ninja (for the build phase).
+- **Phase overrides**: The `configure` phase runs `cmake` with the `#:configure-flags`, and the `build` phase runs `cmake --build` (or `ninja` if Ninja is used).
+- **Arguments**: The `#:cmake` argument overrides which CMake package is used.
+
+In a port, you would define a build system that inherits the `gnu-build-system` phase list, replaces `configure` and `build`, and adds CMake to the implicit inputs.
+
+
+### 4.5 `meson-build-system`
+
+This variable is exported by `(guix build-system meson)`. It implements the build procedure for packages that use Meson as their build system. It adds both Meson and Ninja to the set of inputs, and they can be changed with the parameters `#:meson` and `#:ninja` if needed.
+
+**Note**: The `meson-for-build` package, which was previously documented as the default and was described as special because it didn't clear the `RUNPATH`, has been **removed** from Guix as of February 2021, since it no longer carried any special patches and was obsolete. The default Meson is now the standard `meson` package.
+
+This build system is an extension of `gnu-build-system`, but with the following phases changed to some specific for Meson: the `configure` phase runs `meson setup`, the `build` phase runs `ninja`, and the `check` phase runs `ninja test` (or the specified test target).
+
+**Module**: `(guix build-system meson)`
+
+#### Porting `meson-build-system`
+
+- **Implicit inputs**: Meson, Ninja. The `#:meson` and `#:ninja` arguments override them.
+- **Phase overrides**: The `configure` phase runs `meson setup builddir` (with `#:configure-flags`), the `build` phase runs `ninja -C builddir`, and the `check` phase runs `ninja -C builddir test`.
+- **Out-of-source builds**: Meson always builds out-of-source by default.
+
+In a port, you would define a build system that inherits `gnu-build-system`, replaces `configure`, `build`, and `check`, and adds Meson and Ninja to the implicit inputs.
+
+
+### 4.6 `trivial-build-system`
+
+This variable is exported by `(guix build-system trivial)`. This build system requires a `#:builder` argument. This argument must be a Scheme expression that builds the package output(s) — as with `build-expression->derivation`. It is "trivial" in the sense that it provides basically no support: it does not pull any implicit inputs, and does not have a notion of build phases.
+
+This is the "bare-bones" build system, useful for packages that need nothing sophisticated and where you want to specify the entire build process manually.
+
+**Module**: `(guix build-system trivial)`
+
+#### Porting `trivial-build-system`
+
+This is the simplest build system to port. It has:
+
+- **Implicit inputs**: None.
+- **Phases**: None. It requires a `#:builder` argument that is a raw expression which builds the output.
+
+In a port, the `lower` method simply creates a bag whose `build` function executes the user-provided builder. There is no phase list to iterate over.
+
+
+### 4.7 `copy-build-system`
+
+This variable is exported by `(guix build-system copy)`. It supports builds of simple packages that don't require much compiling, mostly just moving files around. It adds much of the `gnu-build-system` packages to the set of inputs. Because of this, the `copy-build-system` does not require all the boilerplate code often needed for the `trivial-build-system`.
+
+To further simplify the file installation process, an `#:install-plan` argument is exposed to let the packager specify which files go where. The install plan is a list of `(source target [filters])`. `filters` are optional. When `source` matches a file or directory without trailing slash, install it to `target`. If `target` has a trailing slash, the basename of `source` is appended to `target`; otherwise, `target` is treated as the final destination.
+
+**Module**: `(guix build-system copy)`
+
+#### Porting `copy-build-system`
+
+- **Implicit inputs**: Most of the `gnu-build-system` inputs (tools like `coreutils`, `tar`, etc.).
+- **Phase overrides**: The `install` phase is replaced with a phase that interprets the `#:install-plan`. For each entry `(source target filters)`, copy `source` to the appropriate location under `target`. The `filters` can exclude files matching patterns.
+- **No configure/build/check**: Unless the package provides them, these phases are typically omitted or no-ops.
+
+In a port, you would implement a phase that iterates over the install plan and performs the copy operations.
+
+
+### 4.8 `ant-build-system`
+
+This variable is exported by `(guix build-system ant)`. It implements the build procedure for Java packages that can be built with the Ant build tool. It adds both `ant` and the Java Development Kit (JDK) as provided by the `openjdk` package to the set of inputs. Different packages can be specified with the `#:ant` and `#:jdk` parameters, respectively.
+
+Historically, the build system used `icedtea` as the default JDK, but the modern default is `openjdk`. The `icedtea` packages remain available for building older JDK versions as part of the bootstrap chain.
+
+When the original package does not provide a suitable Ant build file, the parameter `#:jar-name` can be used to generate a minimal Ant build file `build.xml` with tasks to build the specified jar archive. In this case, the parameter `#:source-dir` can be used to specify the source sub-directory, defaulting to `"src"`. The `#:main-class` parameter can be used with the minimal ant buildfile to specify the main class of the resulting jar, making the jar file executable. The `#:test-include` parameter can be used to specify the list of JUnit tests to run; it defaults to `(list "**/*Test.java")`. The `#:test-exclude` can be used to specify tests to exclude. It defaults to `(list "**/Abstract*.java")`, because abstract classes cannot be run as tests. The parameter `#:build-target` can be used to specify the Ant task that should be run during the build phase. By default the `"jar"` task will be run.
+
+This build system inherits from `gnu-build-system`, replacing the `configure` and `build` phases with Ant invocations while retaining other phases such as `strip`, `validate-runpath`, and `compress-documentation`.
+
+**Module**: `(guix build-system ant)`
+
+#### Porting `ant-build-system`
+
+- **Implicit inputs**: Ant, OpenJDK (or IcedTea for older JDKs). The `#:ant` and `#:jdk` arguments override them.
+- **Phase overrides**: The `configure` phase may generate a minimal `build.xml` if `#:jar-name` is provided. The `build` phase runs `ant` with the `#:build-target` (default `"jar"`).
+- **Test handling**: The `check` phase runs JUnit tests, with `#:test-include` and `#:test-exclude` controlling which tests run.
+
+In a port, you would define a build system that inherits `gnu-build-system`, replaces `configure` and `build`, and adds Ant and the JDK to the implicit inputs.
+
+
+### 4.9 `maven-build-system`
+
+For Java projects using Apache Maven. This build system populates a local Maven repository from propagated inputs and runs `mvn` in offline mode. It is exported by `(guix build-system maven)`.
+
+**Module**: `(guix build-system maven)`
+
+#### Porting `maven-build-system`
+
+- **Implicit inputs**: Maven, and a JDK.
+- **Phase overrides**: The `configure` phase sets up a local Maven repository from the propagated inputs. The `build` phase runs `mvn` in offline mode (`-o`) to prevent downloads.
+- **Offline mode**: This is critical for reproducibility; Maven must not attempt to download dependencies.
+
+In a port, you would implement a phase that populates a local repository directory and then invokes Maven with the offline flag.
+
+
+### 4.10 `android-ndk-build-system`
+
+For Android Native Development Kit projects. It is exported by `(guix build-system android-ndk)`. It implements a build procedure for Android NDK packages using a Guix-specific build process. The build system assumes that packages install their public interface (header) files to the subdirectory `include` of the `out` output and their libraries to the subdirectory `lib` of the `out` output. It's also assumed that the union of all the dependencies of a package has no conflicting files. For the time being, cross-compilation is not supported — so right now the libraries and header files are assumed to be host tools.
+
+**Module**: `(guix build-system android-ndk)`
+
+#### Porting `android-ndk-build-system`
+
+- **Implicit inputs**: The Android NDK toolchain.
+- **Phase overrides**: The build system expects headers in `include/` and libraries in `lib/` of the output. There are no standard configure/build phases in the GNU sense; the packager typically provides a custom builder or uses the trivial build system with the NDK toolchain.
+
+In a port, you would implement a build system that sets up the NDK environment and runs the appropriate compilation commands.
+
+
+### 4.11 `asdf-build-system`
+
+For Common Lisp projects using ASDF (Another System Definition Facility). These variables are exported by `(guix build-system asdf)`. `asdf-build-system/source` installs the packages in source form, and can be loaded using any common lisp implementation, via ASDF. The others, such as `asdf-build-system/sbcl`, install binary systems in the format which a particular implementation understands. These build systems can also be used to produce executable programs, or lisp images which contain a set of packages pre-loaded.
+
+The build system uses naming conventions. For binary packages, the package name should be prefixed with the lisp implementation, such as `sbcl-` for `asdf-build-system/sbcl`. The `#:asd-systems` parameter can be used to specify the list of system names if the package must be named in a different way than the naming conventions suggest, or if several systems must be compiled.
+
+**Module**: `(guix build-system asdf)`
+
+#### Porting `asdf-build-system`
+
+- **Implicit inputs**: A Common Lisp implementation (SBCL, CCL, etc.) and ASDF.
+- **Phase overrides**: The `configure` phase sets up the ASDF environment. The `build` phase compiles the system (or systems specified by `#:asd-systems`). The `install` phase installs the compiled fasl files (for binary systems) or the source files (for source systems).
+- **Naming convention**: For binary packages, the package name should be prefixed with the lisp implementation name (e.g., `sbcl-`).
+
+In a port, you would implement phases that invoke the Lisp implementation to load ASDF and compile/install the system.
+
+
+### 4.12 `cargo-build-system` (Expanded)
+
+This variable is exported by `(guix build-system cargo)`. It supports builds of packages using Cargo, the build tool of the Rust programming language.
+
+**Deprecation Warning**: Parameters `#:cargo-inputs` and `#:cargo-development-inputs`, previously used for specifying source inputs, are deprecated. These keyword parameters are being **replaced** by the `cargo-inputs` procedure, which looks up inputs from the new `(gnu packages rust-crates)` module. This procedural approach is part of a broader effort to manage Rust libraries in dedicated modules (`(gnu packages rust-crates)` and `(gnu packages rust-sources)`), designed to better handle the complex dependency graphs of Rust crates. The `cargo-inputs` procedure accepts an optional `#:module` argument and returns a list of inputs suitable for the `#:cargo-inputs` keyword. *(Note: no firm removal date for the old keyword parameters has been announced; the transition is ongoing as part of the Rust team's work on the lockfile-importer-based workflow.)*
+
+It adds `rust` and `rust:cargo` to the set of inputs. A different Rust package can be specified with the `#:rust` parameter. In its `unpack-rust-crates`, `configure` and `patch-cargo-checksums` phases, this build system will make any source inputs available to Cargo. It will also remove an included `Cargo.lock` file to be recreated by Cargo during the build phase. The `package` phase will run `cargo package` to create a source crate for future use. The `install` phase installs the binaries defined by the crate. Unless `install-source? #f` is defined, it will also install a source crate repository of itself and unpacked sources, to ease in future hacking on Rust packages. This build system supports Cargo workspaces.
+
+Parameter `#:cargo-package-crates` (default: `'()`) allows specifying names of **library crates** to package in the `package` phase. Specified crates are packaged from left to right, in case there's dependency among them. For example, specifying `'("pcre2-sys" "pcre2")` will package `"pcre2-sys"` first and then `"pcre2"`. This parameter is a required parameter when packaging a Cargo workspace dependency.
+
+Parameter `#:cargo-install-paths` (default: `'()`) allows specifying paths of binary crates to install in the `install` phase, `'("crates/atuin")` for example.
+
+**2025 Status**: The Rust team has been actively working on improving Cargo workspace support to automatically detect and install all binary targets, which currently requires manual specification via `#:cargo-install-paths`.
+
+#### Rust Crate Handling in Guix (Expanded)
+
+Rust applications (binary crates) and libraries (library crates) are packaged separately. Guix puts its main efforts into applications and only packages libraries as sources, utilizing automation with a manual focus on unbundling vendored dependencies. Rust applications are treated like any other package and named using the lowercase upstream name. When using the Cargo build system, Rust applications should have the `#:install-source?` parameter set to `#f`, as this parameter only makes sense for libraries. When the package source is a Cargo workspace, `#:cargo-install-paths` must be set to enable relevant support.
+
+Rust libraries are hidden from the user interface and managed in two modules:
+
+- **`(gnu packages rust-crates)`**: Source definitions imported from Rust packages' `Cargo.lock` via the crate importer. Imported definitions must be checked and have vendored dependencies unbundled before being contributed to Guix.
+- **`(gnu packages rust-sources)`**: More complex definitions that need to be full packages. This includes Rust libraries requiring external inputs to unbundle and Cargo workspaces. These libraries should have the `#:skip-build?` parameter set to `#t`. For Cargo workspaces, `#:cargo-package-crates` must be set.
+
+Since they are added manually, they follow the usual naming convention for Guix packages, with a `rust-` prefix. In the Rust community it is common for multiple incompatible versions of a package to be used at any given time, so all libraries should have a versioned suffix. The versioned suffix is the left-most non-zero digit (and any leading zeros). This follows the "caret" version scheme intended by Cargo. Examples: `rust-clap-2`, `rust-rand-0.6`. In practice Guix often packages development snapshots of Rust libraries and can't simply identify them by version. In this case, the complete version information can be turned into a version string via `git-version`, for example `rust-pipewire-0.8.0.fd3d8f7` and `rust-pubgrub-0.3.0.b70cf70`.
+
+To avoid merge conflicts with changes from multiple branches, these two modules are maintained by the Rust team. Rust libraries are not referenced directly. `(guix build-system cargo)` provides a `cargo-inputs` procedure to lookup input lists generated by the lockfile importer:
+
+```scheme
+(cargo-inputs name [#:module '(gnu packages rust-crates)])
+```
+
+Lookup Cargo inputs for `name` in `module`, return an empty list if unavailable. `name` must be consistent with the one used in lockfile importer invocation, usually matching the variable name of the package:
+
+```bash
+guix import -i gnu/packages/rust-crates.scm crate -f /path/to/Cargo.lock name
+```
+
+`module` must export a public interface `lookup-cargo-inputs`, a template is available in the `etc/teams/rust` directory of Guix source tree.
+
+**Module**: `(guix build-system cargo)`
+
+#### Porting `cargo-build-system`
+
+- **Implicit inputs**: Rust, Cargo. The `#:rust` argument overrides the Rust package.
+- **Phase overrides**:
+    - `unpack-rust-crates`: Make source inputs available to Cargo.
+    - `configure`: Set up the Cargo environment, remove `Cargo.lock` if present.
+    - `patch-cargo-checksums`: Patch checksums in `.cargo-checksum.json` files.
+    - `build`: Run `cargo build`.
+    - `package`: Run `cargo package` for each crate in `#:cargo-package-crates`.
+    - `install`: Install binaries (and optionally source) using `cargo install` or by copying from `target/`.
+- **Workspace support**: If the package is a Cargo workspace, use `#:cargo-install-paths` to specify which binary crates to install.
+
+In a port, you would implement these phases as wrappers around Cargo commands, with the source inputs made available in the Cargo registry cache.
+
+
+### 4.13 `dune-build-system`
+
+This variable is exported by `(guix build-system dune)`. It supports builds of packages using Dune, a build tool for the OCaml programming language. It is implemented as an extension of the `ocaml-build-system`. As such, the `#:ocaml` and `#:findlib` parameters can be passed to this build system. It automatically adds the `dune` package to the set of inputs. Which package is used can be specified with the `#:dune` parameter.
+
+There is no `configure` phase because Dune packages typically don't need to be configured. The `#:build-flags` parameter is taken as a list of flags passed to the `dune` command during the build. The `#:build?` parameter can be passed to use the `jbuild` command instead of the more recent `dune` command while building a package. Its default value is `#f`. The `#:package` parameter can be passed to specify a package name, which is useful when a package contains multiple packages and you want to build only one of them. This is equivalent to passing the `-p` argument to `dune`.
+
+Regarding the `#:test-target` parameter: In older versions of the `dune-build-system`, this parameter was used to control which script is run for the tests, with the default behavior being to run the test script if it exists, and otherwise run `dune runtest`. However, in current Guix, the `test-target` argument has been **removed** from the `dune-build-system`. The `check` phase now simply runs `dune runtest` to let Dune run all tests for a given package. This change was made to simplify the build system and ensure all tests are executed.
+
+**Module**: `(guix build-system dune)`
+
+#### Porting `dune-build-system`
+
+- **Implicit inputs**: Dune, OCaml, findlib. The `#:dune`, `#:ocaml`, and `#:findlib` arguments override them.
+- **Phase overrides**: There is no `configure` phase. The `build` phase runs `dune build` (or `jbuild build` if `#:build?` is true) with `#:build-flags`. The `check` phase runs `dune runtest`. The `install` phase runs `dune install`.
+- **Package selection**: If `#:package` is set, pass `-p` to Dune.
+
+In a port, you would implement a build system that inherits `ocaml-build-system`, removes the `configure` phase, and replaces `build`, `check`, and `install` with Dune commands.
+
+
+### 4.14 `emacs-build-system`
+
+This variable is exported by `(guix build-system emacs)`. It implements an installation procedure similar to the packaging system of Emacs itself. It first creates the `@var{package}-autoloads.el` file, then it byte compiles all Emacs Lisp files. Differently from the Emacs packaging system, the Info documentation files are moved to the standard documentation directory and the `dir` file is deleted. Each package is installed in its own directory under `share/emacs/site-lisp/guix.d`.
+
+**Module**: `(guix build-system emacs)`
+
+#### Porting `emacs-build-system`
+
+- **Implicit inputs**: Emacs.
+- **Phase overrides**:
+    - `build`: Generate autoloads (`emacs --batch -f package-generate-autoloads`) and byte-compile all `.el` files (`emacs --batch -f batch-byte-compile`).
+    - `install`: Copy `.el` and `.elc` files to `share/emacs/site-lisp/guix.d/package-name/`, copy Info files to `share/info/`, and delete the `dir` file.
+- **No configure/check**: Typically these phases are not used.
+
+In a port, you would implement phases that invoke Emacs in batch mode to perform the autoload generation and byte compilation, then copy the results to the output directories.
+
+
+### 4.15 `font-build-system`
+
+This variable is exported by `(guix build-system font)`. It implements an installation procedure for font packages where upstream provides pre-compiled TrueType, OpenType, etc. font files that merely need to be copied into place. It copies font files to standard locations in the output directory.
+
+**Module**: `(guix build-system font)`
+
+#### Porting `font-build-system`
+
+- **Implicit inputs**: None specifically for fonts; the base `gnu-build-system` inputs may be present.
+- **Phase overrides**: The `install` phase copies font files (`.ttf`, `.otf`, `.woff`, etc.) to `share/fonts/` (or the appropriate subdirectory) in the output.
+- **No configure/build/check**: These phases are typically omitted.
+
+In a port, you would implement a phase that finds font files in the source and copies them to the standard font directory.
+
+
+### 4.16 `go-build-system`
+
+This variable is exported by `(guix build-system go)`. It implements the standard build procedure for packages using the Go build system. It is implemented as an extension of `gnu-build-system`.
+
+Software written in Go is either a 'package' (i.e. library) or 'command' (i.e. executable). Both types can be built with either the `go build` or `go install` commands. However, `go build` discards the result of the build process for Go libraries, so this build system uses `go install`, which preserves the results. Go software is developed and built within a particular file system hierarchy structure called a 'workspace'. This workspace can be found by Go via the `GOPATH` environment variable. In this `go-build-system`, a file system union of the Go-language dependencies is created. Previously, `GOPATH` was made a list of store directories, but this was stopped because Go programs started keeping references to these directories in Go 1.11.
+
+Go software is uniquely named using an 'import path'. The import path is based on the URL of the software's source. Because most source code is provided over the internet, the import path is typically a combination of the remote URL and the source repository's file system structure. The `#:import-path` argument must be specified in the package's arguments field. The key `#:go` can be used to specify the Go compiler with which to build the package.
+
+**Module**: `(guix build-system go)`
+
+#### Porting `go-build-system`
+
+- **Implicit inputs**: Go. The `#:go` argument overrides the Go compiler.
+- **Phase overrides**:
+    - `configure`: Set up the `GOPATH` workspace by creating a union of all Go-language inputs.
+    - `build`: Run `go install` with the `#:import-path` to install the package into the output.
+    - `check`: Run `go test` if tests are enabled.
+- **Import path**: The `#:import-path` argument is **required** and specifies the Go import path (e.g., `"github.com/user/repo"`).
+
+In a port, you would implement a phase that creates a temporary `GOPATH` directory and symlinks the source and all Go inputs into it, then runs `go install` with the appropriate import path.
+
+
+### 4.17 `haskell-build-system`
+
+This variable is exported by `(guix build-system haskell)`. It implements the standard Haskell package build procedure. The Haskell compiler, to find libraries, relies on a library database with a binary cache. For GHC the cache has to be named `package.cache`. If every library would generate the cache at build time, then they would clash in profiles. For this reason, the cache is not generated when generating libraries substitutes. Instead:
+
+- At build time, the `setup-compiler` phase is used to generate a temporary library database and its cache.
+- The cache is generated when a profile is created.
+
+The build system uses a `Setup.hs` or `Setup.lhs` file and runs `runhaskell Setup.hs configure`, `build`, `copy`, followed by `register` (to avoid trying to register libraries in the read-only compiler store directory). The `#:cabal-revision` argument can be used to specify which Cabal file revision from Hackage should be used. The build system generates the package documentation by running `runhaskell Setup.hs haddock`, unless `#:haddock? #f` is passed.
+
+**Module**: `(guix build-system haskell)`
+
+#### Porting `haskell-build-system`
+
+- **Implicit inputs**: GHC, Cabal, and the `runhaskell` interpreter.
+- **Phase overrides**:
+    - `setup-compiler`: Generate a temporary library database and its cache.
+    - `configure`: Run `runhaskell Setup.hs configure` with the appropriate flags.
+    - `build`: Run `runhaskell Setup.hs build`.
+    - `install`: Run `runhaskell Setup.hs copy` followed by `runhaskell Setup.hs register`.
+- **Cabal revision**: The `#:cabal-revision` argument specifies which revision of the Cabal file to use from Hackage.
+
+In a port, you would implement phases that invoke `runhaskell Setup.hs` with the appropriate commands, and handle the library database cache carefully.
+
+
+### 4.18 `node-build-system` (Enhanced)
+
+This variable is exported by `(guix build-system node)`. It implements the build procedure used by Node.js, which implements an approximation of the `npm install` command, followed by an `npm test` command. Which Node.js package is used to interpret the `npm` commands can be specified with the `#:node` parameter which defaults to `node`.
+
+**2024–2025 Enhancements**: The build system has gained a `delete-dependencies` helper function, which allows packagers to remove specific dependencies from `package.json` before the build. This is useful for:
+
+- **Bootstrapping**: Many node packages skip the configure phase because they lack both dependencies and a convenient way to build without all of them.
+- **Unbundling**: Removing vendored or problematic dependencies.
+
+The function removes specified packages from the `"dependencies"` and `"devDependencies"` objects in `package.json`. It was later extended to also remove from `"peerDependencies"` since the current version of npm in Guix installs peerDependencies by default.
+
+**Module**: `(guix build-system node)`
+
+#### Porting `node-build-system`
+
+- **Implicit inputs**: Node.js. The `#:node` argument overrides the Node package.
+- **Phase overrides**:
+    - `configure`: Set up `node_modules` by symlinking inputs (an approximation of `npm install`). Use `delete-dependencies` to remove unwanted packages.
+    - `build`: Typically nothing, or run a build script if one exists.
+    - `check`: Run `npm test`.
+- **No network access**: The build system must not download packages from the npm registry; all dependencies must be provided as inputs.
+
+In a port, you would implement a phase that creates a `node_modules` directory from the package's inputs, then runs `npm test` or the appropriate test command.
+
+
+### 4.19 `ocaml-build-system`
+
+This variable is exported by `(guix build-system ocaml)`. It implements a build procedure for OCaml packages, which consists of choosing the correct set of commands to run for each package. It tries to run `ocaml setup.ml -configure`, `-build`, `-install` if a `setup.ml` file exists; otherwise it falls back to running `./configure` and `make`, or `ocaml pkg/build.ml` for packages using `pkg.ml`. It sets `OCAMLFIND_DESTDIR` and `OCAMLFIND_LDCONF` appropriately. The `#:ocaml` and `#:findlib` parameters can be used to specify which OCaml and findlib packages to use.
+
+**Module**: `(guix build-system ocaml)`
+
+#### Porting `ocaml-build-system`
+
+- **Implicit inputs**: OCaml, findlib. The `#:ocaml` and `#:findlib` arguments override them.
+- **Phase overrides**: The build system tries different build strategies:
+    1. If `setup.ml` exists: run `ocaml setup.ml -configure`, `-build`, `-install`.
+    2. Otherwise: run `./configure` and `make`.
+    3. Otherwise: run `ocaml pkg/build.ml`.
+- **Environment**: Set `OCAMLFIND_DESTDIR` and `OCAMLFIND_LDCONF` appropriately.
+
+In a port, you would implement a phase that checks for the existence of these files and runs the appropriate commands.
+
+
+### 4.20 `perl-build-system`
+
+This variable is exported by `(guix build-system perl)`. It implements the standard build procedure for Perl packages, which either consists in running `perl Build.PL --prefix=/gnu/store/...`, followed by `Build` and `Build install`; or in running `perl Makefile.PL PREFIX=/gnu/store/...`, followed by `make` and `make install`, depending on which of `Build.PL` or `Makefile.PL` is present in the package distribution. Preference is given to the former if both `Build.PL` and `Makefile.PL` exist in the package distribution. This preference can be reversed by specifying `#t` for the `#:make-maker?` parameter. The initial `perl Makefile.PL` or `perl Build.PL` invocation passes flags specified by the `#:make-maker-flags` or `#:module-build-flags` parameter, respectively. Which Perl package is used can be specified with `#:perl`.
+
+**Module**: `(guix build-system perl)`
+
+#### Porting `perl-build-system`
+
+- **Implicit inputs**: Perl. The `#:perl` argument overrides the Perl package.
+- **Phase overrides**:
+    - `configure`: If `Build.PL` exists (and `#:make-maker?` is false), run `perl Build.PL` with `#:module-build-flags`. Otherwise, run `perl Makefile.PL` with `#:make-maker-flags`.
+    - `build`: If using `Build.PL`, run `./Build`; otherwise run `make`.
+    - `install`: If using `Build.PL`, run `./Build install`; otherwise `make install`.
+- **Preference**: `Build.PL` is preferred over `Makefile.PL` unless `#:make-maker?` is true.
+
+In a port, you would implement a phase that checks for `Build.PL` and `Makefile.PL` and runs the appropriate commands.
+
+
+### 4.21 `qt-build-system`
+
+This variable is exported by `(guix build-system qt)`. It is intended for use with applications using Qt or KDE. This build system adds the following two phases to the ones defined by `cmake-build-system`:
+
+- **`check-setup`**: The phase prepares the environment for running the checks as commonly used by Qt test programs. For now this only sets some environment variables: `QT_QPA_PLATFORM=offscreen`, `DBUS_FATAL_WARNINGS=0` and `CTEST_OUTPUT_ON_FAILURE=1`. This phase is added before the `check` phase. It's a separate phase to ease adjusting if necessary.
+- **`qt-wrap`**: The phase searches for Qt5 plugin paths, QML paths and some XDG in the inputs and output. In case some path is found, all programs in the output's `bin/`, `sbin/`, `libexec/` and `lib/libexec/` directories are wrapped in scripts defining the necessary environment variables. It is possible to exclude specific package outputs from that wrapping process by listing their names in the `#:qt-wrap-excluded-outputs` parameter. This is useful when an output is known not to contain any Qt binaries, and where wrapping would gratuitously add a dependency of that output on Qt, KDE, or such. This phase is added after the `install` phase.
+
+**Module**: `(guix build-system qt)`
+
+#### Porting `qt-build-system`
+
+- **Implicit inputs**: The `cmake-build-system` implicit inputs, plus Qt libraries and tools.
+- **Phase additions**:
+    - `check-setup` (before `check`): Set Qt-specific environment variables.
+    - `qt-wrap` (after `install`): Find Qt plugin paths, QML paths, and XDG directories in the inputs and output, and wrap all binaries in `bin/`, `sbin/`, `libexec/`, and `lib/libexec/` to set the necessary environment variables.
+- **Exclusions**: The `#:qt-wrap-excluded-outputs` argument lists outputs to exclude from wrapping.
+
+In a port, you would define a build system that inherits `cmake-build-system`, adds these two phases, and adds Qt to the implicit inputs.
+
+
+### 4.22 `r-build-system`
+
+This variable is exported by `(guix build-system r)`. It implements the build procedure used by R packages, which involves running `R CMD INSTALL` with the appropriate arguments to install the package into the output directory. It provides the `cran-uri` and `bioconductor-uri` helper procedures for constructing URIs for R packages on CRAN and Bioconductor, respectively.
+
+**Module**: `(guix build-system r)`
+
+#### Porting `r-build-system`
+
+- **Implicit inputs**: R.
+- **Phase overrides**: The `install` phase runs `R CMD INSTALL` with the `--library` flag pointing to the output's `site-library` directory.
+- **No configure/build/check**: R packages are typically installed directly from source without a separate configure or build step.
+
+In a port, you would implement a phase that invokes `R CMD INSTALL` with the appropriate library path.
+
+
+### 4.23 `ruby-build-system`
+
+This variable is exported by `(guix build-system ruby)`. It implements the RubyGems build procedure used by Ruby packages, which involves running `gem build` followed by `gem install`. The build system unpacks `.gem` archives using `gem unpack`, and renames the resulting directory to `"gem"` to keep file names shorter. It also handles the case where a gemspec uses `git ls-files` by replacing it with a deterministic `find` command, since `git ls-files` is not reproducible.
+
+**Module**: `(guix build-system ruby)`
+
+#### Porting `ruby-build-system`
+
+- **Implicit inputs**: Ruby, RubyGems.
+- **Phase overrides**:
+    - `unpack`: Use `gem unpack` to extract the `.gem` archive, then rename the resulting directory to `"gem"`.
+    - `build`: Run `gem build` to create the `.gem` file.
+    - `install`: Run `gem install` to install the gem into the output.
+- **Reproducibility fix**: Replace `git ls-files` in gemspecs with a deterministic `find` command.
+
+In a port, you would implement phases that invoke `gem` commands and handle the directory renaming.
+
+
+### 4.24 `scons-build-system`
+
+For packages using the SCons build tool. It is exported by `(guix build-system scons)`.
+
+**Module**: `(guix build-system scons)`
+
+#### Porting `scons-build-system`
+
+- **Implicit inputs**: SCons, Python (since SCons is a Python tool).
+- **Phase overrides**: The `configure` phase runs `scons` with the appropriate configuration. The `build` phase runs `scons` to build. The `install` phase runs `scons install` with the prefix set to the output.
+- **Arguments**: Common arguments include `#:scons-flags`.
+
+In a port, you would implement phases that invoke `scons` with the appropriate targets and flags.
+
+
+### 4.25 `texlive-build-system`
+
+This variable is exported by `(guix build-system texlive)`. It implements the standard build procedure for TeX Live packages. It builds a modifiable union of all inputs (excluding bash) in the `configure` phase, overrides the `texmf.cnf` configuration file with the correct `TEXMFROOT` and `TEXMF` settings, and sets environment variables such as `TEXMFCNF` and `TEXMF`. The build system adds `texlive-bin` from `(gnu packages tex)` to the native inputs. It can be overridden with the `#:texlive-bin` argument. The package `texlive-latex-bin`, from the same module, contains most of the tools for building TeX Live packages.
+
+The `build` phase compiles `.ins` files (or the specified `#:build-targets`) using LaTeX in nonstop mode. The `install` phase copies the built files to the appropriate location under the `tex-directory` (specified with the `#:tex-directory` argument). The `#:link-scripts` argument can be used to create symlinks for scripts.
+
+**Module**: `(guix build-system texlive)`
+
+#### Porting `texlive-build-system`
+
+- **Implicit inputs**: `texlive-bin` (and `texlive-latex-bin` for building).
+- **Phase overrides**:
+    - `configure`: Create a union of all inputs (excluding bash) and override `texmf.cnf`.
+    - `build`: Compile `.ins` files (or `#:build-targets`) using LaTeX in nonstop mode.
+    - `install`: Copy built files to the appropriate location under `tex-directory` (specified by `#:tex-directory`).
+- **Script symlinks**: The `#:link-scripts` argument creates symlinks for scripts.
+
+In a port, you would implement phases that set up the TeX environment and run LaTeX commands.
+
+
+### 4.26 `waf-build-system`
+
+For packages using the Waf build system. It is exported by `(guix build-system waf)`.
+
+**Module**: `(guix build-system waf)`
+
+#### Porting `waf-build-system`
+
+- **Implicit inputs**: Python (since Waf is a Python tool), and possibly the Waf script itself.
+- **Phase overrides**: The `configure` phase runs `./waf configure` with the appropriate flags. The `build` phase runs `./waf build`. The `install` phase runs `./waf install` with the prefix set to the output.
+- **Arguments**: Common arguments include `#:configure-flags` and `#:build-flags`.
+
+In a port, you would implement phases that invoke the Waf script with the appropriate commands.
+
+
+### 4.27 `zig-build-system` (New)
+
+This variable is exported by `(guix build-system zig)`. It implements the build procedures for the Zig build system (`zig build` command). Zig 0.13.0 is now available in Guix master, and a fully bootstrapped Zig (without binary blobs) was achieved in late 2024.
+
+Selecting this build system adds `zig` to the package inputs, in addition to the packages of `gnu-build-system`. The default compiler package can be overridden with the `#:zig` parameter.
+
+**Key Arguments**:
+- `#:zig-build-flags`: A list of flags passed to the `zig` command during the build.
+- `#:zig-test-flags`: A list of flags passed to the `zig test` command during the `check` phase.
+- `#:zig-release-type`: Declares the type of release (e.g., `"safe"`, `"fast"`, or `"small"`).
+
+**Cross-Compilation**: The build system handles Zig's unique target triplet naming with a `zig-target` procedure that translates standard GNU triplets to Zig's format (e.g., `"i686-linux-gnu"` → `"x86-linux-gnu"`, `"x86_64-w64-mingw32"` → `"x86_64-windows-gnu"`).
+
+**Phases**: There is no `configure` phase because Zig packages typically do not need to be configured. The `build` phase runs `zig build` with the specified flags. The `check` phase runs `zig test`.
+
+**Module**: `(guix build-system zig)`
+
+#### Porting `zig-build-system`
+
+- **Implicit inputs**: Zig, plus the `gnu-build-system` inputs.
+- **Phase overrides**:
+    - `build`: Run `zig build` with `#:zig-build-flags` and `#:zig-release-type`.
+    - `check`: Run `zig test` with `#:zig-test-flags`.
+    - No `configure` phase.
+- **Cross-compilation**: Use the `zig-target` mapping to translate GNU triplets to Zig's target format.
+
+In a port, you would implement a build system that adds Zig to the implicit inputs, skips the `configure` phase, and wraps the `zig build` command with the appropriate flags.
+
+
+### 4.28 `julia-build-system` (New)
+
+This variable is exported by `(guix build-system julia)`. It implements the build procedure used by Julia packages, which essentially is similar to running `julia -e 'using Pkg; Pkg.add(package)'` in an environment where `JULIA_LOAD_PATH` contains the paths to all Julia package inputs. Tests are run by calling `/test/runtests.jl`.
+
+The Julia package name and UUID are read from the file `Project.toml`. These values can be overridden by passing the argument `#:julia-package-name` (which must be correctly capitalized) or `#:julia-package-uuid`.
+
+**Binary Dependencies (JLLWrappers)**: Julia packages usually manage their binary dependencies via `JLLWrappers.jl`, a Julia package that creates a module (named after the wrapped library followed by `_jll.jl`). To add the binary path to `_jll.jl` packages, you need to patch the files under `src/wrappers/`, replacing the call to the macro `JLLWrappers.@generate_wrapper_header`, adding as a second argument containing the store path to the binary. For example:
+
+```scheme
+(add-after 'unpack 'override-binary-path
+  (lambda* (#:key inputs #:allow-other-keys)
+    (for-each (lambda (wrapper)
+                (substitute* wrapper
+                  (("generate_wrapper_header.*")
+                   (string-append
+                    "generate_wrapper_header(\"MbedTLS\", \""
+                    (assoc-ref inputs "mbedtls") "\")\n"))))
+              (find-files "src/wrappers/" "\\.jl$"))))
+```
+
+**The `link-depot` Phase**: A critical phase that creates a link at the correct location to allow `Pkg` to find packages that were already installed by Guix.
+
+Some older packages that aren't using `Project.toml` yet will require this file to be created. It is internally done if the arguments `#:julia-package-name` and `#:julia-package-uuid` are provided.
+
+**Reproducibility Note**: As of 2025, there is an open bug report (#47354) indicating that Julia packages built with Julia 1.8.3 are not reproducible. The upstream Julia project has been unresponsive to fixing this issue, and the Debian project removed Julia in 2022 partly due to this problem. This issue remains unresolved and is a known limitation for reproducibility in Guix.
+
+**Module**: `(guix build-system julia)`
+
+#### Porting `julia-build-system`
+
+- **Implicit inputs**: Julia.
+- **Phase overrides**:
+    - `configure`: Set up the Julia depot and `JULIA_LOAD_PATH`.
+    - `build`: Run `julia -e 'using Pkg; Pkg.add(...)'` to build the package.
+    - `check`: Run `julia --project=. test/runtests.jl`.
+    - `link-depot`: Create a link to allow `Pkg` to find Guix-installed packages.
+- **JLLWrappers patching**: For packages with binary dependencies, patch `src/wrappers/` to point to the correct store paths.
+- **Package metadata**: Read from `Project.toml`, or override with `#:julia-package-name` and `#:julia-package-uuid`.
+
+In a port, you would implement phases that set up the Julia depot, invoke `Pkg.add`, and handle the `Project.toml` metadata.
+
+
+### 4.29 `rakudo-build-system` (New)
+
+This variable is exported by `(guix build-system rakudo)`. It implements the build procedure used by Rakudo (https://rakudo.org/) for Perl 6 (Raku) packages. It installs the package to `/gnu/store/.../NAME-VERSION/share/perl6` and installs the binaries. Which Rakudo package is used can be specified with the `#:rakudo` parameter.
+
+This is implemented as an extension of `gnu-build-system`, with specific phases for the Raku ecosystem:
+
+- **`check`**: Runs `prove6 -I=lib t/` if the `perl6-tap-harness` input is available.
+- **`install`**: Uses either `zef` (if `perl6-zef` is in inputs) or the `install-dist.p6` script from Rakudo to install the distribution. It sets `RAKUDO_RERESOLVE_DEPENDENCIES=0` and `RAKUDO_MODULE_DEBUG=1` for verbose output.
+- **`install-libs`**: Copies the `lib/` directory to `share/perl6/lib`, handling any `.precomp` lock files.
+- **`install-bins`**: Copies any binaries from `bin/` to the output.
+
+**Module**: `(guix build-system rakudo)`
+
+#### Porting `rakudo-build-system`
+
+- **Implicit inputs**: Rakudo, plus the `gnu-build-system` inputs.
+- **Phase overrides**:
+    - `check`: Run `prove6` for tests.
+    - `install`: Use `zef` or `install-dist.p6` to install the distribution.
+    - `install-libs`: Copy the `lib/` directory to the output.
+    - `install-bins`: Copy binaries to the output.
+- **Dependencies**: Raku module dependencies should be in `propagated-inputs`.
+
+In a port, you would implement phases that invoke the Rakudo installer and handle the Raku module directory structure.
+
+
+### 4.30 `composer-build-system` (New)
+
+This variable is exported by `(guix build-system composer)`. It implements the build procedure for packages using Composer, the PHP package manager. It automatically adds the `php` package to the set of inputs. Which package is used can be specified with the `#:php` parameter.
+
+The `#:test-target` parameter is used to control which script is run for the tests. By default, it runs `composer test` if a test script is defined.
+
+This is implemented as an extension of `gnu-build-system`.
+
+**Implementation Note**: A critical fix was made to avoid importing host-side Guile-JSON modules, which would make builds dependent on the Guile-JSON version currently installed by the user. The solution uses `with-extensions` instead.
+
+**Module**: `(guix build-system composer)`
+
+#### Porting `composer-build-system`
+
+- **Implicit inputs**: PHP, Composer.
+- **Phase overrides**:
+    - `configure`: Run `composer install` to set up dependencies.
+    - `build`: Typically nothing, or run a build script.
+    - `check`: Run `composer test` or the script specified by `#:test-target`.
+    - `install`: Copy the package files to the output.
+
+In a port, you would implement phases that invoke Composer for dependency management and run PHP tests.
+
+
+### 4.31 `dub-build-system` (New)
+
+This variable is exported by `(guix build-system dub)`. It implements the Dub build procedure used by D packages, which involves running `dub build` and `dub run`. Installation is done by copying the files manually. Which D compiler is used can be specified with the `#:ldc` parameter which defaults to `ldc`.
+
+**Module**: `(guix build-system dub)`
+
+#### Porting `dub-build-system`
+
+- **Implicit inputs**: LDC (the LLVM-based D compiler), Dub.
+- **Phase overrides**:
+    - `configure`: Set up the Dub environment.
+    - `build`: Run `dub build` with the appropriate flags.
+    - `check`: Run `dub test`.
+    - `install`: Copy the built binaries and libraries to the output manually.
+- **Compiler selection**: The `#:ldc` parameter overrides the default D compiler.
+
+In a port, you would implement phases that invoke `dub build` and manually copy the output files.
+
+
+### 4.32 Additional Build Systems
+
+The Guix reference manual also documents other build systems not listed in the original document.
+
+#### `agda-build-system`
+
+This variable is exported by `(guix build-system agda)`. It implements a build procedure for Agda libraries. It adds `agda` to the set of inputs. A different Agda can be specified with the `#:agda` key. The `#:plan` key is a list of cons cells `(regexp . parameters)`, where `regexp` matches `.agda` files to build, and `parameters` is an optional list of parameters that will be passed to Agda when type-checking it. When the library uses Haskell to generate a file containing all imports, the convenience `#:gnu-and-haskell?` can be set to `#t` to add `ghc` and the standard inputs of `gnu-build-system` to the input list.
+
+**Porting note**: Add Agda to the implicit inputs. The `build` phase runs `agda --compile` (or type-checks) the files matching the `#:plan` patterns. If `#:gnu-and-haskell?` is set, add GHC and the standard GNU inputs.
+
+#### `chicken-build-system`
+
+This variable is exported by `(guix build-system chicken)`. It builds CHICKEN Scheme modules (also called "eggs" or "extensions"). CHICKEN generates C source code, which then gets compiled by a C compiler, in this case GCC. This build system adds `chicken` to the package inputs, as well as the packages of `gnu-build-system`. The build system can't (yet) deduce the egg's name automatically, so just like with `go-build-system` and its `#:import-path`, you should define `#:egg-name` in the package's arguments field. For example, if you are packaging the `srfi-1` egg: `(arguments '(#:egg-name "srfi-1"))`. Egg dependencies must be defined in `propagated-inputs`, not `inputs`, because CHICKEN doesn't embed absolute references in compiled eggs. Test dependencies should go to `native-inputs`, as usual.
+
+**Porting note**: Add CHICKEN and the `gnu-build-system` inputs. The `build` phase runs `chicken-install` with the `#:egg-name`. Dependencies go in `propagated-inputs`.
+
+#### `elm-build-system`
+
+This variable is exported by `(guix build-system elm)`. It implements a build procedure for Elm packages similar to `elm install`. The build system adds an Elm compiler package to the set of inputs. The default compiler package (currently `elm`) can be overridden with the `#:elm` parameter. Elm packages needed by the build system itself are added as implicit inputs if they are not already provided. Using `elm-build-system` to build Elm applications (which declare `{"type": "application"}` in `elm.json`) is supported; the example applications mentioned above use the `patch-application-dependencies` procedure provided by `(guix build elm-build-system)` to rewrite their `elm.json` files to refer to the package versions actually present in the build environment.
+
+**Porting note**: Add Elm to the implicit inputs. The `build` phase compiles the package using `elm make` and patches `elm.json` to refer to the provided dependencies.
+
+#### `guile-build-system`
+
+This build system is for Guile packages that consist exclusively of Scheme code and that are so lean that they don't even have a makefile, let alone a configure script. It compiles Scheme code using `guild compile`. Packages built with `guile-build-system` must provide a Guile package in their `native-inputs` field. It supports cross-compilation by using the `--target` option of `guild compile`.
+
+**Porting note**: Add Guile to the native inputs. The `build` phase runs `guild compile` on all Scheme files. Cross-compilation is supported via `--target`.
+
+#### `linux-module-build-system`
+
+`linux-module-build-system` allows building Linux kernel modules. This build system is an extension of `gnu-build-system`, but with the following phases changed: `configure` configures the environment so that the Linux kernel's Makefile can be used to build the external kernel module; `build` uses the Linux kernel's Makefile in order to build the external kernel module; `install` uses the Linux kernel's Makefile in order to install the external kernel module. It is possible and useful to specify the Linux kernel to use for building the module (in the arguments form of a package using the `linux-module-build-system`, use the key `#:linux` to specify it).
+
+**Porting note**: Add the Linux kernel to the inputs (or specify via `#:linux`). The `configure`, `build`, and `install` phases invoke the kernel's Makefile with the appropriate `M=` and `PWD=` variables.
+
+#### `tree-sitter-build-system`
+
+This variable is exported by `(guix build-system tree-sitter)`. It implements procedures to compile grammars for the Tree-sitter parsing library. It essentially runs `tree-sitter generate` to translate `grammar.js` grammars to JSON and then to C, which it then compiles to native code. Tree-sitter packages may support multiple grammars, so this build system supports a `#:grammar-directories` keyword to specify a list of locations where a `grammar.js` file may be found. Grammars sometimes depend on each other, such as C++ depending on C and TypeScript depending on JavaScript. You may use `inputs` to declare such dependencies.
+
+**Porting note**: Add the Tree-sitter CLI to the implicit inputs. The `build` phase runs `tree-sitter generate` for each grammar directory (specified by `#:grammar-directories`), then compiles the generated C code.
+
+#### `channel-build-system`
+
+This variable is exported by `(guix build-system channel)`. This build system is meant primarily for internal use. A package using this build system must have a channel specification as its `source` field; alternatively, its source can be a directory name, in which case an additional `#:commit` argument must be supplied to specify the commit being built (a hexadecimal string). Optionally, a `#:channels` argument specifying additional channels can be provided. The resulting package is a Guix instance of the given channel(s), similar to how `guix time-machine` would build it.
+
+**Porting note**: This is a meta-build system for building Guix itself from a channel. The `build` phase runs `guix pull` with the specified channel and commit.
+
+#### `renpy-build-system`
+
+This variable is exported by `(guix build-system renpy)`. It implements the more or less standard build procedure used by Ren'py games, which consists of loading `#:game` once, thereby creating bytecode for it. It further creates a wrapper script in `bin/` and a desktop entry in `share/applications`, both of which can be used to launch the game. Which Ren'py package is used can be specified with `#:renpy`. Games can also be installed in outputs other than `"out"` by using `#:output`.
+
+**Porting note**: Add Ren'py to the implicit inputs. The `build` phase loads the game (specified by `#:game`) to create bytecode, then creates a wrapper script in `bin/` and a desktop entry in `share/applications`.
+
+
+### Summary Table of Build Systems
+
+| Build System | Module | Primary Use | Key Implicit Inputs | Key Phase Overrides |
+|---|---|---|---|---|
+| `gnu-build-system` | `(guix build-system gnu)` | Autotools-based projects | GCC, libc, Coreutils, Bash, Make, Diffutils, grep, sed, tar, gzip | Full standard lifecycle |
+| `python-build-system` | `(guix build-system python)` | Legacy `setup.py`-based Python (deprecated) | Python, setuptools | `configure`, `build`, `install`, `check`, `wrap`, `rename-pth-file` |
+| `pyproject-build-system` | `(guix build-system pyproject)` | PEP 517 / `pyproject.toml` Python (now primary) | Python (sans pip), build backend | `configure` (backend detection), `build`, `install`, `check` |
+| `cmake-build-system` | `(guix build-system cmake)` | CMake projects | CMake | `configure`, `build` |
+| `meson-build-system` | `(guix build-system meson)` | Meson projects | Meson, Ninja | `configure`, `build`, `check` |
+| `trivial-build-system` | `(guix build-system trivial)` | Bare-bones, custom builder | None | None (requires `#:builder`) |
+| `copy-build-system` | `(guix build-system copy)` | Simple file copying | Most of `gnu-build-system` | `install` (interprets `#:install-plan`) |
+| `ant-build-system` | `(guix build-system ant)` | Java/Ant projects | Ant, OpenJDK | `configure`, `build` |
+| `maven-build-system` | `(guix build-system maven)` | Java/Maven projects | Maven, JDK | `configure` (local repo), `build` (offline) |
+| `android-ndk-build-system` | `(guix build-system android-ndk)` | Android NDK projects | Android NDK | Custom |
+| `asdf-build-system` | `(guix build-system asdf)` | Common Lisp/ASDF projects | SBCL/CCL, ASDF | `configure`, `build`, `install` |
+| `cargo-build-system` | `(guix build-system cargo)` | Rust/Cargo projects | Rust, Cargo | `unpack-rust-crates`, `configure`, `patch-cargo-checksums`, `build`, `package`, `install` |
+| `dune-build-system` | `(guix build-system dune)` | OCaml/Dune projects | Dune, OCaml, findlib | `build`, `check`, `install` |
+| `emacs-build-system` | `(guix build-system emacs)` | Emacs Lisp packages | Emacs | `build` (autoloads, byte-compile), `install` |
+| `font-build-system` | `(guix build-system font)` | Pre-compiled font packages | None | `install` (copy fonts) |
+| `go-build-system` | `(guix build-system go)` | Go projects | Go | `configure` (GOPATH), `build` (`go install`), `check` |
+| `haskell-build-system` | `(guix build-system haskell)` | Haskell packages | GHC, Cabal | `setup-compiler`, `configure`, `build`, `install` |
+| `node-build-system` | `(guix build-system node)` | Node.js packages | Node.js | `configure` (node_modules), `check` (`npm test`), `delete-dependencies` helper |
+| `ocaml-build-system` | `(guix build-system ocaml)` | OCaml packages | OCaml, findlib | `configure`, `build`, `install` (strategy depends on files present) |
+| `perl-build-system` | `(guix build-system perl)` | Perl packages | Perl | `configure`, `build`, `install` (Build.PL or Makefile.PL) |
+| `qt-build-system` | `(guix build-system qt)` | Qt/KDE applications | CMake, Qt | Adds `check-setup` and `qt-wrap` to `cmake-build-system` |
+| `r-build-system` | `(guix build-system r)` | R packages | R | `install` (`R CMD INSTALL`) |
+| `ruby-build-system` | `(guix build-system ruby)` | Ruby gems | Ruby, RubyGems | `unpack` (`gem unpack`), `build` (`gem build`), `install` (`gem install`) |
+| `scons-build-system` | `(guix build-system scons)` | SCons projects | SCons, Python | `configure`, `build`, `install` |
+| `texlive-build-system` | `(guix build-system texlive)` | TeX Live packages | `texlive-bin` | `configure`, `build`, `install` |
+| `waf-build-system` | `(guix build-system waf)` | Waf projects | Python, Waf | `configure`, `build`, `install` |
+| `zig-build-system` | `(guix build-system zig)` | Zig projects | Zig, GNU inputs | `build` (`zig build`), `check` (`zig test`) |
+| `julia-build-system` | `(guix build-system julia)` | Julia packages | Julia | `configure` (depot), `build` (`Pkg.add`), `check`, `link-depot` |
+| `rakudo-build-system` | `(guix build-system rakudo)` | Raku/Perl 6 packages | Rakudo, GNU inputs | `check` (`prove6`), `install` (zef/install-dist.p6), `install-libs`, `install-bins` |
+| `composer-build-system` | `(guix build-system composer)` | PHP/Composer packages | PHP, Composer | `configure` (`composer install`), `check` (`composer test`) |
+| `dub-build-system` | `(guix build-system dub)` | D/Dub packages | LDC, Dub | `build` (`dub build`), `check` (`dub test`), `install` (manual copy) |
+| `agda-build-system` | `(guix build-system agda)` | Agda libraries | Agda | `build` (type-check `.agda` files) |
+| `chicken-build-system` | `(guix build-system chicken)` | CHICKEN Scheme eggs | CHICKEN, GCC | `build` (`chicken-install`) |
+| `elm-build-system` | `(guix build-system elm)` | Elm packages | Elm | `build` (`elm make`) |
+| `guile-build-system` | `(guix build-system guile)` | Lean Guile Scheme packages | Guile | `build` (`guild compile`) |
+| `linux-module-build-system` | `(guix build-system linux-module)` | Linux kernel modules | Linux kernel | `configure`, `build`, `install` (kernel Makefile) |
+| `tree-sitter-build-system` | `(guix build-system tree-sitter)` | Tree-sitter grammars | Tree-sitter CLI | `build` (`tree-sitter generate`) |
+| `channel-build-system` | `(guix build-system channel)` | Guix instances from channels | Guix | `build` (`guix pull`) |
+| `renpy-build-system` | `(guix build-system renpy)` | Ren'py games | Ren'py | `build` (load game, create wrapper) |
+
+---
+
+## 5. Arguments, Phases, and the Standard Build Lifecycle
+
+### 5.1 The `arguments` Field
+
+The `arguments` field is a list of keyword arguments passed to the build system. The most important keyword is `#:phases`, which is an alist of `(symbol . procedure)` pairs. Other common keywords:
+
+- `#:configure-flags`: list of flags for `./configure`
+- `#:make-flags`: list of flags for `make`
+- `#:tests?`: whether to run tests
+- `#:test-target`: the make target for tests (default `"check"`)
+- `#:parallel-build?`, `#:parallel-tests?`: parallelism
+- `#:out-of-source?`: whether to build in a separate directory
+- `#:strip-binaries?`: whether to strip binaries
+- `#:validate-runpath?`: whether to validate `RUNPATH`
+- `#:substitutable?`: whether substitutes are allowed
+- `#:implicit-inputs?`: whether to add implicit inputs
+- `#:guile`: the Guile to use for the build
+- `#:make-dynamic-linker-cache?`: whether to create the dynamic linker cache
+
+**Porting note**: In a port, these arguments become a dictionary or map. The build system should treat them as optional configuration and pass them to the phase functions via a context object.
+
+### 5.2 `%standard-phases` for `gnu-build-system`
+
+The phases, in order:
+
+1. **`set-SOURCE-DATE-EPOCH`**: Set `SOURCE_DATE_EPOCH` for reproducibility.
+2. **`set-paths`**: Set environment variables (`PATH`, `CPATH`, `LIBRARY_PATH`, `PKG_CONFIG_PATH`, etc.) from inputs and search paths.
+3. **`install-locale`**: Install a UTF-8 locale (default `en_US.utf8`).
+4. **`unpack`**: Unpack the source tarball, apply patches and snippet.
+5. **`bootstrap`**: Run `autoreconf` if needed (only if `bootstrap?` is set).
+6. **`patch-usr-bin-file`**: Patch `/usr/bin/file` in all executable `configure` files found in the source tree.
+7. **`patch-source-shebangs`**: Patch shebangs in source files so they point to the right store locations.
+8. **`configure`**: Run `./configure` with the given flags.
+9. **`patch-generated-file-shebangs`**: Patch shebangs in files generated by `configure`.
+10. **`build`**: Run `make`.
+11. **`check`**: Run `make check` (or the test target).
+12. **`install`**: Run `make install` with the prefix set to the output directory.
+13. **`patch-shebangs`**: Patch shebangs in installed executable files.
+14. **`strip`**: Strip binaries.
+15. **`validate-runpath`**: Validate `RUNPATH` in ELF files.
+16. **`validate-documentation-location`**: Ensure documentation is in `share/doc`.
+17. **`delete-info-dir-file`**: Remove the `dir` file generated by `install-info`.
+18. **`patch-dot-desktop-files`**: Patch `.desktop` files to refer to absolute store paths.
+19. **`make-dynamic-linker-cache`**: Create the dynamic linker cache (`ld.so.cache`) for the output.
+20. **`install-license-files`**: Install license files into the `out` output.
+21. **`reset-gzip-timestamps`**: Reset timestamps of gzip-compressed files.
+22. **`compress-documentation`**: Compress documentation with gzip.
+
+The `make-dynamic-linker-cache` phase was added in a commit dated 2020-12-01 and is a critical part of the build process for creating a functional `ld.so.cache`. **Important caveat**: On `i686-linux`, this phase can cause the build daemon to run out of memory (OOM) with certain packages (e.g., LLVM 15 and later). In such cases, the phase must be deleted via `(delete 'make-dynamic-linker-cache)`.
+
+**Porting note**: Each phase is a function that takes a context object and performs side effects on the filesystem. The phase list is an ordered sequence. In a port, you would define each phase as a function and store them in an array. The build system then iterates over the array, applying any modifications from `#:phases`.
+
+### 5.3 `modify-phases`
+
+The `modify-phases` macro is the standard way to alter phases:
+
+```scheme
+(modify-phases %standard-phases
+  (delete 'configure)
+  (add-before 'build 'set-prefix
+    (lambda* (#:key outputs #:allow-other-keys)
+      (let ((out (assoc-ref outputs "out")))
+        (substitute* "Makefile"
+          (("PREFIX = /usr/local") (string-append "PREFIX = " out)))
+        #t)))
+  (add-after 'install 'install-manpage
+    (lambda* (#:key outputs #:allow-other-keys)
+      (install-file "foo.1" (string-append (assoc-ref outputs "out") "/share/man/man1"))))
+  (replace 'check
+    (lambda* (#:key tests? #:allow-other-keys)
+      (when tests?
+        (invoke "make" "test")))))
+```
+
+Available operations: `(add-before phase new-phase proc)`, `(add-after phase new-phase proc)`, `(replace phase proc)`, `(delete phase)`.
+
+**Porting note**: In a port, you would implement a similar mechanism: a function that takes a base phase list and a list of modifications (each specifying an operation, a target phase, and optionally a new phase name and function), and returns a new phase list.
+
+### 5.4 Lambda Signatures in Phases
+
+```scheme
+(lambda* (#:key inputs outputs tests? #:allow-other-keys)
+  ...)
+```
+
+`#:allow-other-keys` is essential because different build systems pass different keywords.
+
+**Porting note**: In a port, phase functions should accept a context object that contains all possible keys. Use a dictionary or a struct with optional fields.
+
+### 5.5 `substitute-keyword-arguments`
+
+When inheriting a package and modifying specific keywords:
+
+```scheme
+(arguments
+ (substitute-keyword-arguments (package-arguments base)
+   ((#:configure-flags flags ''())
+    `(cons "--enable-foo" ,flags))
+   ((#:tests? _ #t) #f)))
+```
+
+The default value `''()` is a quoted empty list to avoid unquoting issues.
+
+**Porting note**: In a port, you would implement a helper that merges argument dictionaries, with the ability to transform specific keys.
+
+
+## 6. G-Expressions
+
+G-expressions (gexps) are the staging mechanism used in Guix. A gexp is written `#~(...)` and can be unquoted with `#$` or spliced with `#$@`.
+
+```scheme
+#~(begin
+    (use-modules (guix build utils))
+    (let ((out #$output))
+      (mkdir-p (string-append out "/bin"))
+      (call-with-output-file (string-append out "/bin/hello")
+        (lambda (port)
+          (format port "#!#$bash/bin/sh\necho hello\n")))))
+```
+
+Inside a gexp, `#$output` and `#$inputs` are bound automatically. `#$(this-package-input "foo")` refers to an input of the current package.
+
+**Porting note**: G-expressions are a staging mechanism that defers evaluation until build time. In a port, you would represent them as data structures that are serialized and then evaluated at build time. The key is that `#$output` and `#$inputs` are resolved from the build context.
+
+### 6.1 `mixed-text-file`
+
+Return an object representing a store file containing text that is a sequence of strings and file-like objects:
+
+```scheme
+(mixed-text-file "profile"
+                 "export PATH=" coreutils "/bin:"
+                 grep "/bin")
+```
+
+### 6.2 `program-file`
+
+Return an object representing an executable store item that runs a G-expression:
+
+```scheme
+(program-file "hello"
+  #~(begin
+      (use-modules (ice-9 format))
+      (format #t "Hello, world!~%")))
+```
+
+The `#:guile` parameter specifies the Guile package used to run the script; the `#:module-path` parameter specifies where imported modules are looked up.
+
+### 6.3 `computed-file`
+
+Return an object representing a store item (file or directory) computed by a G-expression:
+
+```scheme
+(computed-file "generated"
+  #~(begin
+      (call-with-output-file #$output
+        (lambda (port)
+          (display "generated content\n" port)))))
+```
+
+### 6.4 `scheme-file`
+
+Like `program-file` but returns a non-executable Scheme file.
+
+### 6.5 `file-append`
+
+The `file-append` procedure creates a file-like object that appends a string to the store path of a package:
+
+```scheme
+(file-append coreutils "/bin/ls")
+```
+
+
+## 7. Search Paths and Environment Variables
+
+Search paths are how Guix makes dependencies visible at run time without FHS. A `search-path-specification` describes an environment variable and the subdirectories that should be added to it. The full field list is documented in Section 1.11.
+
+Common search paths: `PATH` (`bin`, `sbin`), `PYTHONPATH` (`lib/pythonX.Y/site-packages`), `PERL5LIB` (`lib/perl5/site_perl`), `CLASSPATH` (`share/java`), `JAVA_HOME` (`.`), `GUILE_LOAD_PATH` (`share/guile/site/X.Y`), `PKG_CONFIG_PATH` (`lib/pkgconfig`, `share/pkgconfig`), `CMAKE_PREFIX_PATH` (`.`), `GEM_PATH` (`lib/ruby/gems/X.Y`), `LUA_PATH`, `LUA_CPATH` (`share/lua/5.X`, `lib/lua/5.X`), `XDG_DATA_DIRS` (`share`), `INFOPATH` (`share/info`), `MANPATH` (`share/man`).
+
+**Porting note**: Search paths are just environment variables that are set by the build system before running the build. In a port, you would implement a phase that iterates over the search path specifications and sets the corresponding environment variables.
+
+### 7.1 `wrap-program`
+
+The `wrap-program` procedure creates a wrapper script that sets environment variables before executing the real program. The `variables` argument should look like this: `'(variable delimiter position list-of-directories)` where `delimiter` is optional. `:` will be used if `delimiter` is not given.
+
+```scheme
+(wrap-program "foo"
+  '("PATH" ":" = ("/gnu/.../bar/bin"))
+  '("CERT_PATH" suffix ("/gnu/.../baz/certs" "/qux/certs")))
+```
+
+If `program` has previously been wrapped by `wrap-program`, the wrapper is extended with definitions for `variables`. If it is not, `sh` will be used as the interpreter.
+
+### 7.2 `wrap-script`
+
+The `wrap-script` procedure wraps the script `program` such that `variables` are set first. The format of `variables` is the same as in the `wrap-program` procedure. This procedure differs from `wrap-program` in that it does not create a separate shell script. Instead, `program` is modified directly by prepending a Guile script, which is interpreted as a comment in the script's language. Note that this procedure can only be used once per file as Guile scripts are not supported.
+
+
+## 8. Python Bootstrapping
+
+Python presents a bootstrapping challenge: building Python requires Python for some build tools, and building Python packages requires Python. Guix solves this through a staged bootstrap process. The bootstrap packages have been moved to a separate module `python-commencement.scm`.
+
+### 8.1 `python-minimal`
+
+The base for all Python packages. It strips optional dependencies:
+
+```scheme
+(define-public python-minimal
+  (package
+    (inherit python)
+    (name "python-minimal")
+    (outputs '("out"))
+    (inputs '())))
+```
+
+### 8.2 `python-boot0`
+
+The first stage, built with `%bootstrap-guile` and no implicit inputs. It uses Python 3.5.9 because newer versions require pthreads, which is missing on non-x86 platforms at this stage. The Guix source confirms this constraint: "We cannot use Python 3.7 and later here, because they require pthreads, which is missing on non-x86 platforms at this stage".
+
+The `python-boot0` package has been decoupled from the regular `python` package to make it easier to change Python without triggering a full bootstrap rebuild. The commit message states: "Decouple python-boot0 from python. Do not use SUBSTITUTE-KEYWORD-ARGUMENTS to make it easier to change Python without a full bootstrap".
+
+### 8.3 `python-sans-pip` and `python-sans-pip-wrapper`
+
+Guix introduces two variables in `gnu/packages/python.scm`: `python-sans-pip` and `python-sans-pip-wrapper`. These provide a Python without `pip` pre-installed, which is used as the default Python for `pyproject-build-system` to avoid build isolation issues. The `pyproject-build-system` defaults to `python-sans-pip-wrapper` as its `default-python`.
+
+These variables were introduced alongside the `pyproject-build-system`. The `python-sans-pip-wrapper` is now the preferred Python for use with `pyproject-build-system`. This change was introduced to prevent `pip` from attempting to download dependencies during builds, which would violate Guix's reproducibility guarantees.
+
+### 8.4 The Bootstrap Chain
+
+1. `python-boot0` (3.5.9) — minimal, no pthreads
+2. `python-boot0` is used to build `python-minimal` (current version)
+3. `python-minimal` is used to build `python` (with all optional features)
+4. `python-sans-pip` is derived from `python` with `pip` removed
+5. `python-sans-pip-wrapper` wraps `python-sans-pip` for use as the default Python in `pyproject-build-system`
+
+### 8.5 `python-build-system` Phases
+
+**Note:** `python-build-system` is deprecated in favor of `pyproject-build-system`. The phase information is retained for historical reference.
+
+The `python-build-system` uses a modified list of `%standard-phases`. In recent Guix versions, the `check` phase is moved to occur **after** the `install` phase, to ease testing the built package and to fix a reproducibility issue with bytecode compilation. This change was briefly reverted in October 2020 and then re-applied; the current state is that `check` occurs after `install`. The phase list also includes a `rename-pth-file` phase, which renames `easy-install.pth` to `NAME.pth` to avoid conflicts between packages installed with setuptools. This phase is added before `strip` in the standard phase list.
+
+The typical phase order is:
+
+1. `set-SOURCE-DATE-EPOCH`
+2. `set-paths`
+3. `install-locale`
+4. `unpack`
+5. `ensure-no-mtimes-pre-1980`
+6. `enable-bytecode-determinism`
+7. `check-setup`: check that `setup.py` exists
+8. `configure`: run `setup.py` with `--no-user-cfg`
+9. `build`
+10. `install`: run `setup.py install`
+11. `check`: run `setup.py test` or `pytest` (after install)
+12. `wrap`: wrap scripts to set `GUIX_PYTHONPATH` so that they can find their propagated inputs at runtime
+13. `rename-pth-file`: rename `easy-install.pth` to avoid conflicts
+14. `strip`
+15. `validate-runpath`
+16. `validate-documentation-location`
+17. `delete-info-dir-file`
+18. `install-license-files`
+19. `reset-gzip-timestamps`
+20. `compress-documentation`
+
+### 8.6 `pyproject-build-system` Phases
+
+The `pyproject-build-system` inherits the phase structure from `python-build-system` with modifications for PEP 517. The manual documents the API differences in detail (see Section 4.3), and the phase structure follows the same lifecycle with the `install` phase performing the build and installation via PEP 517 hooks, and the `check` phase running tests.
+
+### 8.7 Packaging a Python Library: Example
+
+```scheme
+(define-public python-numpy
+  (package
+    (name "python-numpy")
+    (version "1.26.0")
+    (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "numpy" version))
+              (sha256 (base32 "0abc..."))))
+    (build-system pyproject-build-system)
+    (arguments
+     (list
+      #:test-flags #~(list "--ignore" "numpy/tests/test_public_api.py")
+      #:phases #~(modify-phases %standard-phases
+                   (add-before 'check 'set-environment
+                     (lambda _
+                       (setenv "OPENBLAS_NUM_THREADS" "1"))))))
+    (native-inputs (list python-cython python-pytest python-hypothesis))
+    (inputs (list openblas))
+    (home-page "https://numpy.org/")
+    (synopsis "Fundamental package for scientific computing with Python")
+    (description "NumPy is the fundamental package for scientific computing
+with Python.  It contains a powerful N-dimensional array object.")
+    (license license:bsd-3)))
+```
+
+### 8.8 Python Edge Cases
+
+- **`python-wrapper` vs `python`**: The wrapper is what you usually want in `inputs`, because it sets `PYTHONPATH`.
+- **`propagated-inputs` for Python libraries**: Python libraries should almost always use `propagated-inputs` for other Python libraries.
+- **Native inputs for build tools**: `python-cython`, `python-pytest`, `python-setuptools`, `python-wheel`, `python-build`, `python-installer` are native inputs.
+- **C extensions**: For C extensions, add `python-cython` to native inputs and use `pyproject-build-system`.
+- **`--no-build-isolation`**: `pyproject-build-system` passes this by default to avoid downloading build dependencies.
+
+
+## 9. Java Bootstrapping
+
+The Java bootstrap is one of the most complex in Guix. It starts from a C++ compiler and reaches a full OpenJDK. The Java bootstrap begins with Jikes, a Java compiler written in C++. The bootstrap packages have been moved to a separate module `java-bootstrap.scm`.
+
+### 9.1 The Chain
+
+The bootstrappable.org project documents the exact chain:
+
+1. **`jikes`** (1.22): A Java compiler written in C++. Built with `gnu-build-system`.
+2. **`classpath-bootstrap`** (0.93): The last version that can be built with Jikes. The Guix source confirms: "We chose version 0.93 because it is the last version that can be built with Jikes".
+3. **`jamvm-1-bootstrap`** (1.5.1): The last version of JamVM that works with a version of GNU Classpath that does not require ECJ. These three packages make up the bootstrap JDK.
+4. **`ant-bootstrap`**: An older version of Ant, needed to build an older version of ECJ.
+5. **`ecj-bootstrap`** (3.2.2): The last ECJ that doesn't need a full Java 1.5 compiler. Built with `gnu-build-system`.
+6. **`classpath-devel`** (0.99): ECJ is needed to build the latest release (0.99) and the development version of GNU Classpath. We need to build 0.99 first to get a working version of `javah`. The Guix source notes: "The last release of GNU Classpath is 0.99 and it happened in 2012. Since then Classpath has gained much more support for Java 1.6."
+7. **`jamvm-2-bootstrap`** (2.0.0): ECJ, the development version of GNU Classpath, and the latest version of JamVM make up the second stage JDK.
+8. **`ecj-javac-wrapper`**: A wrapper around ECJ that mimics `javac`. The Guix source confirms it uses **`trivial-build-system`**: `(build-system trivial-build-system)` with a custom builder G-expression.
+9. **`icedtea-6`, `icedtea-7`, `icedtea-8`**: OpenJDK 6, 7, 8 built with the above. The second stage JDK is used to build OpenJDK 6 with the Icedtea 1.x build framework.
+10. **`openjdk` 9+**: Built with IcedTea 8.
+
+### 9.2 `classpath-bootstrap`
+
+```scheme
+(define classpath-bootstrap
+  (package
+    (name "classpath")
+    (version "0.93")
+    (source (origin
+              (method url-fetch)
+              (uri (string-append "mirror://gnu/classpath/classpath-"
+                                  version ".tar.gz"))
+              (sha256 (base32 "0i99wf9xd3hw1sj2sazychb9prx8nadxh2clgvk3zlmb28v0jbfz"))
+              (patches (search-patches "classpath-aarch64-support.patch"
+                                       "classpath-miscompilation.patch"))))
+    (build-system gnu-build-system)
+    (arguments
+     `(#:configure-flags
+       (list (string-append "JAVAC="
+                            (search-input-file %build-inputs "/bin/jikes")))))))
+```
+
+Edge cases:
+- **AArch64 support**: The `classpath-aarch64-support.patch` adds support for AArch64.
+- **Miscompilation**: The `classpath-miscompilation.patch` fixes a known miscompilation.
+
+### 9.3 `ecj-bootstrap`
+
+```scheme
+(define ecj-bootstrap
+  (package
+    (name "ecj-bootstrap")
+    (version "3.2.2")
+    (source (origin
+              (method url-fetch)
+              (uri (string-append "http://archive.eclipse.org/eclipse/"
+                                  "downloads/drops/R-" version
+                                  "-200702121330/ecjsrc.zip"))
+              (sha256 (base32 "05hj82kxd23qaglsjkaqcj944riisjha7acf7h3ljhrjyljx8307"))))
+    (build-system gnu-build-system)
+    (arguments
+     `(#:tests? #f
+       #:phases
+       (modify-phases %standard-phases
+         (replace 'configure
+           (lambda* (#:key inputs #:allow-other-keys)
+             (setenv "CLASSPATH"
+                     (string-join
+                      (cons (search-input-file inputs "/lib/rt.jar")
+                            (find-files
+                             (string-append (assoc-ref inputs "ant-bootstrap") "/lib")
+                             "\\.jar$")))))))))
+```
+
+Edge cases:
+- **Jar timestamps**: The `ecj-bootstrap` package repacks jars with timestamps zeroed and compression disabled, so the reference scanner can detect all store references. This is essential for reproducibility.
+- **No tests**: Tests are disabled because the test suite requires a full JDK.
+
+**Build system clarification**: `ecj-bootstrap` itself uses `gnu-build-system`. The related package `ecj-javac-wrapper` (which provides a `javac` that calls ECJ) uses **`trivial-build-system`**, confirmed by the Guix source.
+
+### 9.4 `classpath-devel`
+
+```scheme
+(define-public classpath-devel
+  (let ((commit "e7c13ee0cf2005206fbec0eca677f8cf66d5a103")
+        (revision "1"))
+    (package
+      (inherit classpath-on-sablevm)
+      (version (string-append "0.99-" revision "." (string-take commit 9)))
+      (source (origin
+                (method git-fetch)
+                (uri (git-reference
+                      (url "https://git.savannah.gnu.org/git/classpath.git")
+                      (commit commit)))
+                (file-name (string-append "classpath-" version "-checkout"))
+                (sha256 (base32 "1v2rww76ww322mpg3s12a1kkc6gkp31bm9gcxs532h0wq285fiw4"))))
+      (arguments
+       `(#:make-flags
+         '("JAVAC_MEM_OPT=-J-Xms512M -J-Xmx768M")
+         #:configure-flags
+         (list (string-append "--with-ecj-jar="
+                              (assoc-ref %build-inputs "ecj-bootstrap")
+                              "/share/java/ecj-bootstrap.jar")
+               (string-append "--with-javac="
+                              (assoc-ref %build-inputs "ecj-javac-wrapper")
+                              "/bin/javac")
+               (string-append "JAVA="
+                              (assoc-ref %build-inputs "jamvm")
+                              "/bin/jamvm")
+               "GCJ_JAVAC_TRUE=no"
+               "ac_cv_prog_java_works=yes"
+               "--disable-Werror"
+               "--disable-gmp"
+               "--disable-gtk-peer"
+               "--disable-gconf-peer"
+               "--disable-plugin"
+               "--disable-dssi"
+               "--disable-alsa"
+               "--disable-gjdoc"))))))
+```
+
+Edge cases:
+- **Memory settings**: `JAVAC_MEM_OPT=-J-Xms512M -J-Xmx768M` avoids invalid memory settings on machines with large RAM. The Guix source explicitly notes: "Ensure that the initial heap size is smaller than the maximum size. By default only Xmx is set, which can lead to invalid memory settings on some machines with a lot of memory."
+- **ECJ instead of Jikes**: ECJ is used to compile Classpath.
+- **Git checkout**: The package uses a specific git commit rather than a release tarball.
+
+### 9.5 IcedTea and OpenJDK
+
+IcedTea is a build of OpenJDK that uses the bootstrap JDK. The build is done with `ant` and a `configure` script that takes `--with-jdk-home`, `--with-ecj-jar`, etc.
+
+### 9.6 Java Build Systems
+
+- **`ant-build-system`**: For Ant-based projects. This build system inherits from `gnu-build-system`, replacing the `configure` and `build` phases with Ant invocations while retaining other phases. The default JDK is provided by the `openjdk` package, though `icedtea` packages remain available for building older JDK versions.
+- **`maven-build-system`**: For Maven-based projects. Populates a local Maven repository from propagated inputs and runs `mvn` in offline mode.
+
+### 9.7 Java Edge Cases
+
+- **`JAVA_HOME`**: Many Java build tools require `JAVA_HOME`. Set it in a phase.
+- **`CLASSPATH`**: The classpath must include all dependencies. Use `search-path-specification` with `variable "CLASSPATH"` and `files '("share/java")`.
+- **`jar` reproducibility**: Jars must have timestamps stripped and compression disabled for reproducibility.
+- **`javac` wrapper**: `ecj-javac-wrapper` provides a `javac` that calls ECJ.
+- **AArch64**: Patches are needed for AArch64 support in Classpath and JamVM.
+
+
+## 10. FHS Avoidance: Every Phase, Patch, and Technique
+
+Guix does not follow FHS. Programs are installed into `/gnu/store/<hash>-<package>/`. This section covers every technique for patching FHS assumptions.
+
+### 10.1 `patch-usr-bin-file`
+
+The `patch-usr-bin-file` phase (in `gnu-build-system`) patches `/usr/bin/file` in all executable `configure` files found in the source tree. This is necessary because many `configure` scripts use `/usr/bin/file` to detect file types.
+
+```scheme
+(define* (patch-usr-bin-file #:key native-inputs inputs #:allow-other-keys)
+  "Patch occurrences of /usr/bin/file in all executable configure files."
+  (let ((file (search-input-file (or native-inputs inputs) "/bin/file")))
+    (when file
+      (for-each (lambda (configure)
+                  (when (file-exists? configure)
+                    (substitute* configure
+                      (("/usr/bin/file") file))))
+                (find-files "." "^configure$")))))
+```
+
+### 10.2 `patch-source-shebangs`
+
+Patches shebangs in source files so they point to the right store locations. This includes non-executable files such as `.c` files.
+
+### 10.3 `patch-generated-file-shebangs`
+
+Patches shebangs in files generated by `configure`, including `SHELL` variables in makefiles.
+
+### 10.4 `patch-shebangs`
+
+Patches shebangs in installed executable files. The procedure patches shebangs in `bin`, `sbin`, **and `libexec`** directories. The `/libexec` directory was added to the list in a **July 2021 commit** by Maxime Devos. The commit message states: "Shebangs in `/bin` and `/sbin` subdirectories are currently patched by patch-shebangs. But shebangs in `/libexec` currently aren't, even though they occasionally need to be". The commit added `"/libexec"` to the `bin-directories` list.
+
+```scheme
+(define* (patch-shebangs #:key inputs outputs #:allow-other-keys)
+  "Patch shebangs on installed files."
+  (define bin-directories
+    (match (assoc-ref outputs "out")
+      (#f '())
+      (out (list (string-append out "/bin")
+                 (string-append out "/sbin")
+                 (string-append out "/libexec")))))
+  (define (patch-shebang* file)
+    (let ((interpreter (patch-shebang file)))
+      (when interpreter
+        (format (current-error-port) "patched shebang of '~a' to refer to '~a'~%"
+                file interpreter))))
+  (for-each (lambda (dir)
+              (when (directory-exists? dir)
+                (for-each (lambda (file)
+                            (when (executable-file? file)
+                              (patch-shebang* file)))
+                          (find-files dir "."))))
+            bin-directories))
+```
+
+### 10.5 `patch-shebang` (the Procedure)
+
+The `patch-shebang` procedure in `(guix build utils)` does the actual work. It handles `#!/bin/sh`, `#!/usr/bin/env python`, `#!/usr/bin/perl`, any interpreter found in `PATH`, and falls back to `#!/bin/sh` if no interpreter is found.
+
+### 10.6 `substitute*` for Hardcoded Paths
+
+The most common technique is `substitute*`, which performs in-place string replacement:
+
+```scheme
+(substitute* "Makefile"
+  (("/usr/bin") "")
+  (("/usr/local") (assoc-ref outputs "out"))
+  (("/etc/foo.conf") (string-append out "/etc/foo.conf")))
+```
+
+For multiple files:
+
+```scheme
+(substitute* (find-files "." "\\.(c|h|py)$")
+  (("/usr/bin/env python") (string-append (assoc-ref inputs "python") "/bin/python"))
+  (("/usr/lib") (string-append (assoc-ref inputs "foo") "/lib")))
+```
+
+### 10.7 Common FHS Paths and Their Replacements
+
+| FHS Path | Replacement Strategy |
+|----------|----------------------|
+| `/bin/sh` | `patch-shebangs`, or `(assoc-ref inputs "bash")/bin/sh` |
+| `/bin/bash` | `(assoc-ref inputs "bash")/bin/bash` |
+| `/usr/bin/env` | `patch-shebangs` |
+| `/usr/bin/file` | `patch-usr-bin-file` phase |
+| `/usr/bin/<tool>` | `(search-input-file inputs "/bin/<tool>")` |
+| `/usr/bin/python` | `(assoc-ref inputs "python")/bin/python` |
+| `/usr/bin/perl` | `(assoc-ref inputs "perl")/bin/perl` |
+| `/usr/lib` | `(assoc-ref inputs "<lib>")/lib` |
+| `/usr/lib64` | `(assoc-ref inputs "<lib>")/lib` |
+| `/usr/share` | `(assoc-ref outputs "out")/share` |
+| `/usr/include` | `(assoc-ref inputs "<lib>")/include` |
+| `/etc` | `(assoc-ref outputs "out")/etc` |
+| `/var` | `(assoc-ref outputs "out")/var` |
+| `/sbin` | `(assoc-ref inputs "<tool>")/sbin` |
+| `/opt` | `(assoc-ref outputs "out")` |
+| `/usr/local` | `(assoc-ref outputs "out")` |
+| `/usr` | `(assoc-ref outputs "out")` |
+
+### 10.8 `validate-runpath`
+
+The `validate-runpath` phase checks that all ELF binaries have a `RUNPATH` (or `RPATH`) that refers to existing store paths. It is part of `gnu-build-system`.
+
+### 10.9 `validate-documentation-location`
+
+Ensures documentation is in `share/doc/<package>`, not in `share/<package>` or `doc`.
+
+### 10.10 `compress-documentation`
+
+Compresses documentation with gzip. Strips the `.gz` extension from the top-level file.
+
+### 10.11 `wrap-program` for Runtime Paths
+
+Wrapping is often needed when a program expects to find files at runtime. For example, a Python program that imports a library needs `PYTHONPATH` set:
+
+```scheme
+(add-after 'install 'wrap
+  (lambda* (#:key inputs outputs #:allow-other-keys)
+    (let ((out (assoc-ref outputs "out"))
+          (python (assoc-ref inputs "python")))
+      (wrap-program (string-append out "/bin/foo")
+        `("PYTHONPATH" ":" prefix
+          (,(string-append out "/lib/python3.11/site-packages")
+           ,(string-append python "/lib/python3.11/site-packages")))))))
+```
+
+### 10.12 `wrap-script` for Interpreted Programs
+
+For scripts with shebangs, `wrap-script` rewrites the shebang to invoke Guile with the original script as an argument (see Section 7.2).
+
+### 10.13 `glibc` and `ld.so`
+
+Guix's glibc has a non-standard `ld.so` location. Packages that hardcode `/lib/ld-linux.so.2` need to be patched.
+
+### 10.14 `--emulate-fhs` in `guix shell`
+
+For development environments that need FHS, Guix provides:
+
+```bash
+guix shell --emulate-fhs --container coreutils bash
+```
+
+This sets up a container with a simulated FHS filesystem. It is not used for package builds.
+
+### 10.15 `search-input-file` and `search-input-directory`
+
+Modern helpers for finding inputs:
+
+```scheme
+(search-input-file inputs "/bin/gawk")
+(search-input-directory inputs "/include")
+```
+
+### 10.16 Patches as Files
+
+Patches are stored in `gnu/packages/patches/` and referenced with `search-patches`:
+
+```scheme
+(patches (search-patches "foo-fix-fhs.patch"))
+```
+
+### 10.17 `snippet` for Pre-Patch Modifications
+
+The `snippet` field of an origin modifies the source tree directly:
+
+```scheme
+(snippet '(begin
+            (substitute* "configure"
+              (("/usr/bin/file") "file"))
+            (delete-file "bundled/zlib.c")
+            #t))
+```
+
+### 10.18 Runtime FHS Assumptions
+
+Some programs assume `/etc` exists at runtime. Guix handles this by setting `XDG_CONFIG_HOME` to a writable directory, using `wrap-program` to set configuration paths, patching the program to read from a store path, or providing an `etc` output with default configuration.
+
+### 10.19 System-wide FHS
+
+Guix System does not use FHS. The `/etc` directory is a symlink to a generated directory in the store. `/bin` and `/usr/bin` exist only for compatibility with `--emulate-fhs` containers.
+
+### 10.20 `ld.so.cache`
+
+Guix does not use `ld.so.cache` by default in the traditional FHS sense, but the `make-dynamic-linker-cache` phase creates a cache for the output to speed up application startup. Binaries still have `RUNPATH` set to point to the store paths of their dependencies.
+
+### 10.21–10.25 Other Runtime Assumptions
+
+The remaining runtime assumptions (`pkg-config` files, `cmake` files, `python` paths, `perl` paths, `java` paths) are handled by patching with `substitute*` or setting environment variables from search paths.
+
+---
+
+## 11. Package Variants, Inheritance, and Transformations
+
+### 11.1 The `inherit` Form
+
+The most straightforward way to define a package variant is using `inherit`. This form creates a new package that preserves all fields of the original, except those explicitly overridden.
+
+```scheme
+(use-modules (gnu packages base))  ; for 'hello'
+
+(define hello-2.2
+  (package
+    (inherit hello)
+    (version "2.2")
+    (source (origin
+              (method url-fetch)
+              (uri (string-append "mirror://gnu/hello/hello-" version ".tar.gz"))
+              (sha256 (base32 "0lappv4s1gb5spyqbhh6y15r013zv72yqg2pc130mginf3wdqd8k9"))))))
+```
+
+### 11.2 Removing Inputs with `modify-inputs`
+
+The `modify-inputs` macro can prove useful anytime you want to remove, add, or replace package inputs. It accepts the following clauses:
+
+- `(delete name...)`: Delete from the inputs packages with the given names (strings).
+- `(prepend package...)`: Add packages to the front of the input list.
+- `(append package...)`: Add packages to the end of the input list.
+- `(replace name replacement)`: Replace the named package with `replacement`. This clause is documented in the Guix manual with the example `(modify-inputs (package-inputs guile-redis) (replace "guile" guile-2.2))`.
+
+```scheme
+(use-modules (gnu packages gdb))  ; for 'gdb'
+
+(define gdb-sans-guile
+  (package
+    (inherit gdb)
+    (inputs (modify-inputs (package-inputs gdb)
+              (delete "guile")))))
+```
+
+### 11.3 Parameterized Package Procedures
+
+You may find it useful to write functions that return a package based on some parameters. For example, to create `luasocket` packages for major versions of Lua:
+
+```scheme
+(define (make-lua-socket name lua)
+  ;; Return a luasocket package built with LUA.
+  (package
+    (name name)
+    (version "3.0")
+    ;; several fields omitted
+    (inputs (list lua))
+    (synopsis "Socket library for Lua")))
+
+(define-public lua5.1-socket
+  (make-lua-socket "lua5.1-socket" lua-5.1))
+
+(define-public lua5.2-socket
+  (make-lua-socket "lua5.2-socket" lua-5.2))
+```
+
+### 11.4 `package-input-rewriting` and `package-input-rewriting/spec`
+
+Dependency graph rewriting, for the purposes of swapping packages in the graph, is what the `package-input-rewriting` procedure in `(guix packages)` implements. This is the mechanism behind `--with-input`.
+
+```scheme
+(use-modules (guix packages))
+
+;; Rewrite all direct and indirect dependencies on guile to use guile-2.2 instead.
+(define rewrite-guile
+  (package-input-rewriting `((,guile . ,guile-2.2))))
+
+(rewrite-guile some-package)
+```
+
+The `package-input-rewriting/spec` variant works with specifications (strings like `"guile@2.2"`) rather than package objects directly.
+
+### 11.5 `options->transformation`
+
+The `options->transformation` procedure converts command-line options (like `--with-input`, `--with-source`, `--with-graft`) into a procedure that transforms packages.
+
+```scheme
+(use-modules (guix transformations))
+
+(define transform
+  (options->transformation '((with-input . "guile=guile@2.2"))))
+
+(transform some-package)
+```
+
+
+## 12. Grafts and Security Updates
+
+### 12.1 The Problem: Cascading Rebuilds
+
+When a critical security vulnerability is discovered in a package like Bash or OpenSSL, rebuilding every package that depends on it (which could be thousands) is impractical. Grafts solve this problem.
+
+### 12.2 How Grafts Work
+
+Guix implements grafts, a mechanism that allows for fast deployment of critical updates without the costs associated with a whole-distribution rebuild. The idea is to rebuild only the package that needs to be patched, and then to "graft" it onto packages explicitly installed by the user and that were previously referring to the original package.
+
+### 12.3 The `replacements` Field
+
+A package can declare replacements via the `replacements` field. When a replacement is available, Guix grafts it onto packages that depend on the original, without rebuilding those dependents.
+
+```scheme
+(define-public bash
+  (package
+    (name "bash")
+    (version "5.2")
+    (source ...)
+    (build-system gnu-build-system)
+    ;; ... other fields ...
+    (replacements (list bash-fixed))))  ; a package with the security patch
+```
+
+### 12.4 `--with-graft` Command-Line Option
+
+The `--with-graft` option grafts a replacement onto a package and all its dependencies:
+
+```bash
+guix build --with-graft=gnutls=gnutls@3.5.4 wget
+```
+
+This has the advantage of being much faster than rebuilding everything. But there is a caveat: it works if and only if `package` and `replacement` are strictly compatible—for example, if they provide a library, the application binary interface (ABI) of those libraries must be compatible.
+
+### 12.5 `--with-debug-info`
+
+The `--with-debug-info` option builds a package in a way that preserves its debugging info and grafts it onto packages that depend on it:
+
+```bash
+guix install inkscape --with-debug-info=glib
+```
+
+Only GLib needs to be recompiled so this takes a reasonable amount of time. Under the hood, this works by passing `#:strip-binaries? #f` to the build system of the package of interest. **Note: Most build systems support that option but some do not. In that case, an error is raised.**
+
+
+## 13. Writing Custom Build Systems
+
+### 13.1 The `<build-system>` Record
+
+A build system is a record of type `<build-system>` defined in `(guix build-system)`. The record has the following fields:
+
+- **`name`**: A symbol naming the build system.
+- **`description`**: A short description string.
+- **`lower`**: A procedure that "lowers" a package to a "bag" (an intermediate representation just above derivations).
+
+The historical `build` and `cross-build` fields were removed when bags were introduced. The modern API uses `lower` to produce a `<bag>` record, which is then used to produce derivations.
+
+**Porting note**: In a port, a build system is a data structure with a name, description, a list of implicit inputs, a base phase list, and a `lower` function. The `lower` function merges implicit inputs with explicit inputs and returns a bag.
+
+### 13.2 The `lower` Procedure and Bags
+
+The `lower` procedure takes a package's name, source, and build inputs, and returns a `<bag>` record. The bag contains the build system, arguments, and the inputs as derivations.
+
+```scheme
+(define* (my-build-system-lower name #:key source #:allow-other-keys)
+  "Lower NAME with SOURCE to a bag."
+  (bag
+    (name name)
+    (system (%current-system))
+    (build my-build-procedure)
+    (build-inputs `(("source" ,source)))))
+```
+
+The `build` field of the bag must be a procedure that takes a bag and returns a derivation (typically a G-expression).
+
+**Porting note**: In a port, the bag is a plain object or dictionary. The `build` field is a function that runs the phases.
+
+### 13.3 Example: A Minimal Custom Build System
+
+```scheme
+(define (my-simple-build bag)
+  #~(begin
+      (use-modules (guix build utils))
+      (let ((out (assoc-ref %outputs "out"))
+            (source (assoc-ref %build-inputs "source")))
+        (mkdir-p out)
+        (copy-file source (string-append out "/" #$(bag-name bag))))))
+
+(define* (my-simple-lower name #:key source #:allow-other-keys)
+  (bag
+    (name name)
+    (system (%current-system))
+    (build my-simple-build)
+    (build-inputs `(("source" ,source)))))
+
+(define my-simple-build-system
+  (build-system
+    (name 'my-simple)
+    (description "A trivial build system that copies the source file")
+    (lower my-simple-lower)))
+```
+
+**Porting note**: This minimal example translates directly to any language: a build system with no implicit inputs, a single-phase build function, and a `lower` method that returns a bag containing the source as an input.
+
+
+## 14. Advanced G-Expressions and Build Utilities
+
+### 14.1 `gexp->script` and `gexp->file`
+
+These monadic procedures are the lower-level counterparts of `program-file` and `scheme-file`. They return derivations directly and are used internally by the declarative forms.
+
+### 14.2 `substitute*`
+
+The `substitute*` macro substitutes a regexp in a file by the string returned by a body expression. The body is evaluated with each `match-var` bound to the corresponding positional regexp sub-expression.
+
+```scheme
+(substitute* file
+  (("hello") "good morning\n")
+  (("foo([a-z]+)bar(.*)$" all letters end)
+   (string-append "baz" letters end)))
+```
+
+**Porting note**: This is a regex-based in-place file editor. In a port, you would implement a function that reads a file, applies a list of `(pattern, replacement)` pairs, and writes the file back.
+
+### 14.3 `find-files`
+
+The `find-files` procedure lists all files in a directory matching a predicate or regexp:
+
+```scheme
+;; List all the regular files in the current directory.
+(find-files ".")
+
+;; List all the .scm files under gnu/services.
+(find-files "gnu/services" "\\.scm$")
+
+;; List ar files in the current directory.
+(find-files "." (lambda (file stat) (ar-file? file)))
+```
+
+The procedure accepts `#:stat`, `#:directories?`, and `#:fail-on-error?` keyword arguments.
+
+### 14.4 `search-input-file` and `search-input-directory`
+
+These procedures return the complete file name for a name as found in inputs.
+
+```scheme
+(search-input-file inputs "/bin/gawk")
+(search-input-directory inputs "/include")
+```
+
+Here is a simplified example from the `wireguard-tools` package:
+
+```scheme
+(add-after 'install 'wrap-wg-quick
+  (lambda* (#:key inputs outputs #:allow-other-keys)
+    (let ((coreutils (string-append (assoc-ref inputs "coreutils") "/bin")))
+      (wrap-program (search-input-file outputs "bin/wg-quick")
+        #:sh (search-input-file inputs "bin/bash")
+        `("PATH" ":" prefix ,(list coreutils))))))
+```
+
+### 14.5 `invoke`
+
+The `invoke` procedure invokes a program with the given args. It raises an `&invoke-error` exception if the exit code is non-zero; otherwise it returns `#t`. The advantage compared to `system*` is that you do not need to check the return value, reducing boilerplate in build phases.
+
+```scheme
+(invoke "make" "install")
+```
+
+**Porting note**: In a port, you would implement a function that runs a subprocess and raises an exception on failure.
+
+### 14.6 `delete-file-recursively`
+
+Deletes a directory recursively, like `rm -rf`, without following symlinks. Reports but ignores errors.
+
+### 14.7 `copy-recursively`
+
+Copies a directory recursively, preserving symlinks.
+
+### 14.8 `install-file`
+
+Installs a file to a target directory, creating the directory if it does not exist.
+
+
+## 15. Linting, Styling, and Quality Assurance
+
+### 15.1 `guix lint`
+
+The `guix lint` command helps package developers avoid common errors and use a consistent style. It runs a number of checks on a given set of packages. Available checkers include (see `--list-checkers` for a complete list):
+
+- **`synopsis`**: Validate certain typographical and stylistic rules about package synopses.
+- **`description`**: Validate certain typographical and stylistic rules about package descriptions.
+- **`inputs-should-be-native`**: Suggest inputs that should be native.
+- **`input-labels`**: Report old-style labels that do not match the package name, to help migrate to the new style.
+- **`archival`**: Check whether the source is archived.
+- **`home-page`**: Check whether the home page is reachable.
+- **`source`**: Check whether the source is reachable.
+- **`license`**: Check whether the license is a valid SPDX identifier.
+- **`cve`**: Check for known vulnerabilities.
+- **`formatting`**: Check formatting.
+- **`patches`**: Check whether patches apply.
+
+Options include:
+
+- `--list-checkers`, `-l`: List and describe all available checkers.
+- `--checkers`, `-c`: Only enable the specified checkers.
+- `--exclude`, `-x`: Disable the specified checkers.
+- `--expression`, `-e`: Consider the package evaluated by an expression.
+- `--no-network`, `-n`: Only enable checkers that do not depend on network access.
+- `--load-path`, `-L`: Add a directory to the package module search path.
+
+### 15.2 `guix style`
+
+The `guix style` command helps packagers style their package definitions according to the latest conventions. The command currently focuses on the style of package inputs. It can also rewrite package arguments to use G-expressions.
+
+```bash
+# Convert old-style quoted arguments to modern G-expression style
+guix style -S arguments=package
+
+# List available styling rules
+guix style --list-stylings
+```
+
+### 15.3 `guix size`
+
+The `guix size` command helps package developers profile the disk usage of packages. It is easy to overlook the impact of an additional dependency added to a package, or the impact of using a single output for a package that could easily be split.
+
+```bash
+guix size coreutils
+```
+
+The output shows a table with store item, total size, and self size for each dependency. You can pass package specifications such as `gcc@4.8` or `guile:debug`, or a store item name.
+
+
+## 16. Manifests, Profiles, and Channels
+
+### 16.1 What is a Manifest?
+
+A manifest is a Scheme file that specifies a collection of packages. It is the declarative equivalent of a list of packages to install. Manifests are used with `guix shell -m`, `guix package -m`, and other commands.
+
+### 16.2 Writing a Manifest
+
+The simplest manifest is a list of package specifications:
+
+```scheme
+;; manifest.scm
+(specifications->manifest
+ '("gcc-toolchain" "make" "git" "emacs" "emacs-geiser" "emacs-geiser-guile"))
+```
+
+The `specifications->manifest` procedure converts a list of package specification strings into a manifest object.
+
+### 16.3 Exporting a Manifest from the Command Line
+
+If you have a command line you want to turn into a manifest, use `--export-manifest`:
+
+```bash
+guix shell --export-manifest gcc-toolchain make git > manifest.scm
+```
+
+### 16.4 Using a Manifest
+
+```bash
+guix shell -m manifest.scm
+guix package -m manifest.scm
+guix build -m manifest.scm
+```
+
+### 16.5 Manifest with Transformations
+
+Manifests can include package transformations:
+
+```scheme
+(use-modules (guix transformations))
+
+(define transform
+  (options->transformation '((with-input . "guile=guile@2.2"))))
+
+(manifest
+  (list (transform some-package)))
+```
+
+### 16.6 What is a Channel?
+
+A channel is a Git repository containing package definitions (and optionally other Guix code). Channels are the standard method for distributing and sharing package definitions outside of Guix proper.
+
+### 16.7 Creating a Channel
+
+To create a channel, create a Git repository containing your own package modules. The repository should have a `.guix-channel` file at its root, which describes the channel:
+
+```scheme
+;; .guix-channel
+(channel
+ (version 0)
+ (dependencies
+  (channel
+   (name 'guix-science)
+   (url "https://codeberg.org/guix-science/guix-science")
+   (branch "master"))))
+```
+
+The `version` field is mandatory and should be `0`. The `dependencies` field lists other channels this channel depends on.
+
+### 16.8 Using a Custom Channel
+
+Users can add your channel to their `~/.config/guix/channels.scm`:
+
+```scheme
+(cons (channel
+        (name 'my-channel)
+        (url "https://github.com/user/my-channel"))
+      %default-channels)
+```
+
+Then run `guix pull` to fetch the channel.
+
+### 16.9 Pinning Channels for Reproducibility
+
+Channels can be pinned to specific commits for reproducibility:
+
+```bash
+guix time-machine -C channels.scm -- shell -m manifest.scm
+```
+
+The pinned channel commits address a problem similar to "lock files" as implemented by some deployment tools—they allow you to pin and reproduce a set of packages.
+
+### 16.10 System-Wide Channel Customization
+
+On Guix System, you can customize the system-wide Guix using the `guix-for-channels` procedure:
+
+```scheme
+(use-modules (gnu packages package-management)
+             (guix channels))
+
+(define my-channels
+  (append (list (channel
+                  (name 'guix-science)
+                  (url "https://codeberg.org/guix-science/guix-science")
+                  (branch "master")))
+          %default-channels))
+
+(operating-system
+  ;; ...
+  (services
+   (modify-services %base-services
+     (guix-service-type config =>
+                        (guix-configuration
+                         (inherit config)
+                         (channels my-channels)
+                         (guix (guix-for-channels my-channels)))))))
+```
+
+### 16.11 Channel Authentication
+
+The `guix pull` and `guix time-machine` commands authenticate the code retrieved from channels: they ensure that each commit that is fetched is signed by an authorized developer. The goal is to protect against unauthorized modifications to the channel.
+
+
+## 17. Importers, Pack, and Deploy
+
+### 17.1 Available Importers
+
+Guix provides importers for many upstream repositories:
+
+| Importer | Source |
+|----------|--------|
+| `gnu` | GNU packages |
+| `pypi` | Python Package Index (PyPI) |
+| `cpan` | Comprehensive Perl Archive Network |
+| `hackage` | Haskell Hackage |
+| `stackage` | Stackage (Haskell) |
+| `egg` | Chicken Scheme eggs |
+| `elpa` | Emacs Lisp Package Archive |
+| `gem` | RubyGems |
+| `go` | Go modules |
+| `cran` | Comprehensive R Archive Network |
+| `crate` | crates.io (Rust) |
+| `texlive` | TeX Live |
+| `json` | JSON files |
+| `opam` | OCaml Package Manager |
+| `minetest` | Minetest Content Database |
+| `elm` | Elm packages |
+| `hexpm` | Hex (Elixir/Erlang) |
+| `composer` | Composer (PHP) |
+| `npm-binary` | npm (binary) |
+| `nuget` | NuGet (.NET) |
+
+### 17.2 Using an Importer
+
+```bash
+# Import the latest version of a Python package
+guix import pypi itsdangerous
+
+# Import a specific version
+guix import pypi itsdangerous@1.1.0
+
+# Import a Haskell package
+guix import hackage mtl@2.1.3.1
+
+# Import a Ruby gem
+guix import gem rails@7.0.4
+```
+
+### 17.3 Recursive Imports
+
+Many importers support the `--recursive` (or `-r`) flag, which traverses the dependency graph of the given upstream package recursively and generates package expressions for all those packages that are not yet in Guix:
+
+```bash
+guix import pypi --recursive some-package
+```
+
+### 17.4 Customizing Imports
+
+Importers accept various options:
+
+- `--recursive`, `-r`: Traverse the dependency graph recursively.
+- `--output`, `-o`: Write the package definition to a file.
+- `--insert`, `-i`: Insert the package definition into an existing file.
+- `--style`, `-s`: Specify the style of the generated code (`specification` or `variable`).
+
+### 17.5 `guix pack`
+
+The `guix pack` command creates standalone binary bundles that can be used on systems without Guix. It produces a tarball, Docker image, SquashFS image, or other format.
+
+```bash
+# Create a tarball containing hello and coreutils
+guix pack hello coreutils
+
+# Create a Docker image
+guix pack -f docker --entry-point=bin/guile guile
+
+# Create a SquashFS image
+guix pack -f squashfs hello
+```
+
+The `-f` (or `--format`) option specifies the format. The available formats for `guix pack` are: `tarball` (default), `docker`, `squashfs`, `deb`, and `rpm`. Note that formats such as `qcow2`, `compressed-qcow2`, `iso9660`, and `wsl2` are primarily used for system images with `guix system image` but are also accessible via `guix pack` in some configurations. The `nar` format is a store archive format, not a general-purpose pack format.
+
+### 17.6 `guix deploy`
+
+The `guix deploy` command enables you to use operating-system declarations to manage multiple remote hosts at once as a logical "deployment":
+
+```bash
+guix deploy deploy.scm
+```
+
+The file should evaluate to a list of machine objects:
+
+```scheme
+(use-modules (gnu machine)
+             (gnu machine ssh))
+
+(list
+ (machine
+  (system "x86_64-linux")
+  (operating-system
+   (host-name "server1")
+   ;; ...
+   )
+  (environment managed-host-environment-type)
+  (configuration (machine-ssh-configuration
+                  (host-name "server1.example.com")
+                  (system "x86_64-linux")
+                  (identity "/path/to/ssh-key")))))
+```
+
+### 17.7 Container Images
+
+`guix pack -f docker` produces a tarball that follows the Docker Image Specification. It can be loaded with `docker load` and run with `docker run`:
+
+```bash
+guix pack -f docker --entry-point=bin/guile guile
+docker load -i pack.tar.gz
+docker run image-id
+```
+
+
+## 18. Package Module Architecture and Circular Dependencies
+
+### 18.1 Module Structure
+
+Guix package definitions are organized into modules under the `(gnu packages ...)` namespace. Each module typically corresponds to a category of packages (e.g., `(gnu packages python)`, `(gnu packages java)`, `(gnu packages emacs)`).
+
+Modules are loaded via `#:use-module` in the module definition:
+
+```scheme
+(define-module (gnu packages my-category)
+  #:use-module (guix packages)
+  #:use-module (guix download)
+  #:use-module (guix build-system gnu)
+  #:use-module (guix licenses)
+  #:use-module (gnu packages base)
+  #:export (my-package))
+```
+
+### 18.2 Circular Dependencies Between Modules
+
+While there cannot be circular dependencies between packages, Guile's lax module loading mechanism allows circular dependencies between Guile modules, which doesn't cause problems as long as the following conditions are respected for two modules that are part of a dependency cycle:
+
+1. **Macros are not shared** between the co-dependent modules.
+2. **Top-level variables are only referenced in thunked fields** of the package: `arguments`, `native-inputs`, `inputs`, `propagated-inputs`, or `replacement`.
+3. **Procedures that reference top-level variables of another module are not themselves called at the top level** of a module.
+
+Deviating from these rules may work when there are no dependency cycles between the modules, but given that such cycles are confusing and hard to troubleshoot, it's best to follow these rules to avoid introducing problems down the line.
+
+### 18.3 Common Pitfall: `inherit` at the Top Level
+
+Here is a common trap to avoid:
+
+```scheme
+(define-public avr-binutils
+  (package
+    (inherit (cross-binutils "avr"))
+    (name "avr-binutils")))
+```
+
+In the example above, the `avr-binutils` package is defined in the `(gnu packages avr)` module, and the `cross-binutils` procedure is defined in `(gnu packages cross-base)`. Because the `inherit` field is not thunked, it is evaluated at the top level during loading, which is problematic in the presence of circular dependencies between modules.
+
+This could be resolved by turning the package into a procedure:
+
+```scheme
+(define (make-avr-binutils)
+  (package
+    (inherit (cross-binutils "avr"))
+    (name "avr-binutils")))
+```
+
+It's important to ensure the aforementioned procedure is used only in thunked fields of a package or in another procedure that is also not called at the top level.
+
+### 18.4 Module Conventions
+
+- Package modules should be under `gnu/packages/` in the Guix source tree.
+- Each module should have a `#:use-module` for `(guix packages)` and the relevant build systems.
+- Public packages should be exported via `#:export` or defined with `define-public`.
+- Private packages (used only internally) should be defined with `define` and not exported.
+- The `(gnu packages ...)` namespace is reserved for Guix proper; custom packages should use a different namespace.
+
+
+## 19. Reproducibility and Build Tuning
+
+### 19.1 `SOURCE_DATE_EPOCH`
+
+The `set-SOURCE-DATE-EPOCH` phase sets the `SOURCE_DATE_EPOCH` environment variable to a fixed value, ensuring that timestamps embedded in build artifacts are reproducible.
+
+### 19.2 Path Remapping
+
+To achieve reproducible builds, build paths must be normalized. For C/C++, use `-ffile-prefix-map`:
+
+```scheme
+(arguments
+ (list #:make-flags
+       #~(list "CFLAGS=-ffile-prefix-map=/tmp/build=")))
+```
+
+For Rust, use `--remap-path-prefix`:
+
+```scheme
+(arguments
+ (list #:make-flags
+       #~(list "RUSTFLAGS=--remap-path-prefix=/tmp/build=")))
+```
+
+### 19.3 `#:strip-binaries?`
+
+The `#:strip-binaries?` argument controls whether binaries are stripped of debug symbols. Disabling stripping is useful for debugging:
+
+```scheme
+(arguments
+ (list #:strip-binaries? #f))
+```
+
+### 19.4 `#:validate-runpath?`
+
+The `#:validate-runpath?` argument controls whether `RUNPATH` validation is performed. Disabling it is sometimes necessary for packages with unusual linking:
+
+```scheme
+(arguments
+ (list #:validate-runpath? #f))
+```
+
+### 19.5 `#:substitutable?`
+
+The `#:substitutable?` argument controls whether substitutes (pre-built binaries) are allowed for the package:
+
+```scheme
+(arguments
+ (list #:substitutable? #f))
+```
+
+### 19.6 `#:parallel-build?` and `#:parallel-tests?`
+
+Control parallelism during build and test phases:
+
+```scheme
+(arguments
+ (list #:parallel-build? #f
+       #:parallel-tests? #f))
+```
+
+### 19.7 `guix build --rounds`
+
+The `--rounds=N` option builds a package N times and verifies that the results are identical, useful for testing reproducibility:
+
+```bash
+guix build --rounds=2 some-package
+```
+
+### 19.8 `guix challenge`
+
+The `guix challenge` command compares the output of a package build with the output of other builders, to detect non-reproducibility:
+
+```bash
+guix challenge some-package
+```
+
+
+## 20. Debugging Build Failures (New)
+
+When defining a new package, you will probably find yourself spending some time debugging and tweaking the build until it succeeds. To do that, you need to operate the build commands yourself in an environment as close as possible to the one the build daemon uses.
+
+### 20.1 `--keep-failed` (`-K`)
+
+The first thing to do is to use the `--keep-failed` or `-K` option of `guix build`, which will keep the failed build tree in `/tmp` (or whatever directory you specified as `TMPDIR`).
+
+```bash
+guix build -K some-package
+```
+
+This will output the path to the failed build tree, typically under `/tmp/guix-build-some-package.drv-0`. You can `cd` into this directory and inspect the source tree as it was when the build failed.
+
+### 20.2 Sourcing the Environment
+
+From the failed build tree, you can source the `environment-variables` file, which contains all the environment variable definitions that were in place when the build failed:
+
+```bash
+cd /tmp/guix-build-some-package.drv-0
+source environment-variables
+```
+
+This sets `PATH`, `CPATH`, `LIBRARY_PATH`, `PKG_CONFIG_PATH`, and other variables to match the build daemon's environment. You can then manually run build commands and iterate quickly.
+
+### 20.3 Adding Temporary Debugging Phases
+
+You can add temporary phases to inspect the filesystem state between phases:
+
+```scheme
+(arguments
+ (list #:phases
+       #~(modify-phases %standard-phases
+           (add-after 'configure 'debug-ls
+             (lambda* (#:key outputs #:allow-other-keys)
+               (invoke "ls" "-la")
+               (invoke "cat" "config.log"))))))
+```
+
+### 20.4 Using `--no-grafts` and `--no-substitutes`
+
+When debugging, you may want to disable grafts and substitutes to ensure you're building from source:
+
+```bash
+guix build -K --no-grafts --no-substitutes some-package
+```
+
+### 20.5 Inspecting Build Logs
+
+If a build fails on a remote machine or substitute server, you can still inspect the log:
+
+```bash
+guix build --log-file some-package
+```
+
+This works regardless of how packages or derivations are specified. If a log is unavailable locally, and unless `--no-substitutes` is passed, the command looks for a corresponding log on one of the substitute servers.
+
+### 20.6 Using `guix shell` for Interactive Debugging
+
+For a more interactive debugging experience, you can enter a shell with the package's inputs available:
+
+```bash
+guix shell --container --nesting --development some-package
+```
+
+This drops you into a container with all the build dependencies, where you can manually run configure, make, and other build commands.
+
+### 20.7 Common Build Failure Patterns
+
+| Symptom | Likely Cause | Solution |
+|---------|-------------|----------|
+| `configure: error: C compiler cannot create executables` | Missing toolchain or wrong `CFLAGS` | Check `native-inputs` for gcc, binutils |
+| `No such file or directory: /usr/bin/file` | FHS assumption | Add `patch-usr-bin-file` phase or use `substitute*` |
+| `Shebang not found` | FHS shebang | Use `patch-shebangs` or `patch-source-shebangs` |
+| `Permission denied` when writing to store | Build system trying to write to read-only location | Use `#:out-of-source?` or patch the build system |
+| `error: 'foo' undeclared` | Missing input | Add the package to `inputs` or `native-inputs` |
+| `RUNPATH validation failed` | Missing library reference | Check `inputs` and `propagated-inputs` |
+
+---
+
+## 21. Cross-Compilation Deep Dive (New)
+
+GNU Guix supports two distinct mechanisms to target foreign architectures: **traditional cross-compilation** and **native building**.
+
+### 21.1 Traditional Cross-Compilation
+
+The traditional cross-compilation mechanism uses a cross-compiler that runs on the host machine but produces binaries for the target machine. The commands supporting cross-compilation are `--list-targets` and `--target`.
+
+```bash
+# List available targets
+guix build --list-targets
+
+# Cross-compile hello for AArch64
+guix build --target=aarch64-linux-gnu hello
+```
+
+The `--target` option takes a GNU triplet (e.g., `"aarch64-linux-gnu"`, `"arm-linux-gnueabihf"`, `"x86_64-w64-mingw32"`).
+
+**The `native-inputs` vs. `inputs` Distinction**: When cross-compiling, dependencies listed in `inputs` are built for the target architecture; conversely, dependencies in `native-inputs` are built for the host architecture. In a cross-compilation context, `native-search-paths` applies exclusively to native inputs whereas `search-paths` applies only to host inputs.
+
+**The Major Benefit**: There is no performance penalty compared to emulation using QEMU. However, there are higher risks that some packages fail to cross-compile because fewer users are using this mechanism extensively.
+
+### 21.2 Native Building
+
+The native building mechanism consists in building using the CPU instruction set of the foreign system you are targeting. It often requires emulation, using the QEMU program for instance. The commands that support impersonating a specific system have the `--list-systems` and `--system` options.
+
+```bash
+# List available systems
+guix build --list-systems
+
+# Build for i686-linux on an x86_64 machine
+guix build --system=i686-linux hello
+```
+
+### 21.3 Bootstrapping for a New Platform
+
+To port Guix to a new platform, you need to cross-build the bootstrap binaries:
+
+```bash
+# Cross-build the bootstrap binaries for a new platform
+guix build --target=i585-pc-gnu bootstrap-binaries
+
+# Then "inject" the bootstrap binaries into the package DAG for that platform
+guix build --target=i586-pc-gnu foo
+```
+
+When everything goes well, and assuming the GNU tool chain supports the target platform, this can be as simple as running a command like:
+
+```bash
+guix build --target=armv5tel-linux-gnueabi bootstrap-tarballs
+```
+
+### 21.4 Cross-Compilation in Build Systems
+
+Different build systems handle cross-compilation in different ways:
+
+- **`gnu-build-system`**: Uses the standard `--host` and `--build` configure flags.
+- **`zig-build-system`**: Has a `zig-target` procedure that translates GNU triplets to Zig's target format (e.g., `"i686-linux-gnu"` → `"x86-linux-gnu"`).
+- **`go-build-system`**: Sets `GOOS` and `GOARCH` environment variables.
+- **`cargo-build-system`**: Sets `--target` flag for Cargo.
+
+### 21.5 Cross-Compilation for Common Targets
+
+| Target | GNU Triplet | Notes |
+|--------|-------------|-------|
+| AArch64 Linux | `aarch64-linux-gnu` | Well-supported |
+| ARM Linux | `arm-linux-gnueabihf` | Well-supported |
+| Windows (MinGW) | `x86_64-w64-mingw32` | Supported for many packages |
+| i686 Linux | `i686-linux-gnu` | Well-supported |
+| RISC-V | `riscv64-linux-gnu` | Growing support |
+| PowerPC | `powerpc64le-linux-gnu` | Well-supported |
+
+
+## 22. Performance Tuning (New)
+
+### 22.1 `guix build --tune`
+
+The `--tune` option uses versions of packages marked as "tunable" optimized for a specific CPU. When `cpu` is `native`, or when it is omitted, tune for the CPU on which the `guix` command is running.
+
+```bash
+guix build --tune=native hello
+```
+
+Packages that have the `tunable?` property set are considered tunable packages by the `--tune` option:
+
+```scheme
+(package
+  (name "hello-simd")
+  ;; ...
+  ;; This package may benefit from SIMD extensions so
+  ;; mark it as "tunable".
+  (properties '((tunable? . #t))))
+```
+
+Tuned packages are built with `-march=CPU`; under the hood, the `-march` option is passed to the actual wrapper by a compiler wrapper. Since the build machine may not be able to run code for the target CPU micro-architecture, **the test suite is not run when building a tuned package**. To reduce rebuilds to the minimum, tuned packages are grafted onto packages that depend on them.
+
+**Note**: Using `--no-grafts` cancels the effect of `--tune`.
+
+### 22.2 Parallelism
+
+Control the number of CPU cores used for building each derivation with `--cores`, and the number of parallel build jobs with `--max-jobs`:
+
+```bash
+# Use 4 cores for each derivation
+guix build --cores=4 some-package
+
+# Run up to 8 derivations in parallel
+guix build --max-jobs=8 some-package
+```
+
+### 22.3 Build Deduplication
+
+By default, files added to the store are automatically "deduplicated". This can noticeably reduce disk usage, at the expense of slightly increased input/output load at the end of a build process. To disable this optimization:
+
+```bash
+guix build --no-deduplication some-package
+```
+
+### 22.4 Offloading
+
+Builds for a system other than that of the machine you are using can be offloaded to a remote machine of the right architecture. See the manual for more information on offloading configuration.
+
+### 22.5 Performance Tuning Checklist
+
+| Goal | Option | Trade-off |
+|------|--------|-----------|
+| Faster binaries for local use | `--tune=native` | Not reproducible, grafts only |
+| Faster builds on many-core machine | `--cores=N --max-jobs=M` | Higher memory usage |
+| Less disk usage | Default deduplication | Slower I/O at end of build |
+| Faster builds with substitutes | Default substitute usage | Less control over build options |
+| Reproducible builds only | `--no-substitutes --rounds=2` | Much slower |
+
+
+## 23. Security Hardening (New)
+
+### 23.1 The `guix-daemon` Configuration
+
+The `guix-daemon` is the program that performs derivation builds and store accesses. Its configuration is represented by a data type with several security-relevant fields:
+
+- **`privileged?`** (default: `#t`): Whether to run `guix-daemon` as root. When `true`, `guix-daemon` runs with root privileges and build processes run under unprivileged user accounts as specified by `build-group` and `build-accounts`; when `false`, `guix-daemon` runs as the `guix-daemon` user, which is unprivileged, and so do build processes. The unprivileged or "rootless" mode can reduce the impact of some classes of vulnerabilities that could affect the daemon. The default is currently `#t` but may eventually be changed to `#f`.
+
+- **`build-group`** (default: `"guixbuild"`): Name of the group for build user accounts.
+
+- **`build-accounts`** (default: `10`): Number of build user accounts to create.
+
+- **`chroot?`** (default: `'default`): The value should be one of `#t` or `#f`, in which case chroot is enabled or disabled, respectively; or it should be `'default`, which amounts to `#f` in Docker containers (so that they can be run in non-privileged mode) or `#t` otherwise.
+
+- **`authorize-key?`** (default: `#t`): Whether to authorize the substitute keys listed in `authorized-keys` by default. When `true`, `/etc/guix/acl` cannot be changed by invoking `guix archive --authorize`. You must instead adjust `guix-configuration` as you wish and reconfigure the system.
+
+### 23.2 The `--disable-chroot` Risk
+
+Passing `--disable-chroot` to `guix-daemon` makes it possible for the build users to be taken over by anybody who can start a build. It is strongly recommended to keep chroot enabled unless you have a specific reason not to.
+
+### 23.3 The `--keep-failed` Privilege Escalation Fix
+
+A security vulnerability was discovered where `--keep-failed` could allow privilege escalation. When `settings.keepFailed` is true, the daemon would chown in two steps: first the `/top` sub-directory, and then rename `/top` to its parent. This has been fixed in recent Guix versions. The project recommends upgrading the `guix` daemon to avoid the issue.
+
+### 23.4 The Unprivileged `guix-daemon`
+
+In 2025, Guix announced that `guix-daemon` can now run without root privileges by taking advantage of Linux's unprivileged user namespaces. After much researching and hardening, the project gained enough confidence to merge support for the unprivileged `guix-daemon`.
+
+To enable the unprivileged daemon, set `privileged?` to `#f` in your `guix-configuration`. Note that when changing this option, `/gnu/store`, `/var/guix`, and `/etc/guix` have their ownership automatically changed by the `guix-ownership` service. This can take a while, especially if `/gnu/store` is big; it cannot be interrupted and `guix-daemon` cannot be used until it has completed.
+
+### 23.5 Grafts for Security Updates
+
+Grafts are the primary mechanism for delivering security updates without rebuilding the entire dependency graph. See Section 12 for full details.
+
+### 23.6 Security Hardening Checklist
+
+| Measure | Configuration | Impact |
+|---------|--------------|--------|
+| Run daemon unprivileged | `privileged? #f` | Reduces impact of daemon vulnerabilities |
+| Keep chroot enabled | `chroot? #t` | Isolates build processes |
+| Use build users | `build-accounts N` (N > 1) | Limits privilege of individual builds |
+| Enable substitute authentication | `authorize-key? #t` | Ensures substitutes are signed |
+| Use grafts for updates | Package `replacements` field | Fast security updates without rebuilds |
+| Keep daemon updated | Regular `guix pull` | Latest security fixes |
+
+
+## Appendix A: Complete Advanced Package Example
+
+```scheme
+(define-module (gnu packages my-advanced)
+  #:use-module (guix packages)
+  #:use-module (guix download)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system gnu)
+  #:use-module (guix licenses)
+  #:use-module (guix gexp)
+  #:use-module (guix utils)
+  #:use-module (gnu packages base)
+  #:use-module (gnu packages python)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages gettext)
+  #:export (my-advanced))
+
+(define-public my-advanced
+  (package
+    (name "my-advanced")
+    (version "1.2.3")
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/example/my-advanced")
+                    (commit (string-append "v" version))
+                    (recursive? #t)))
+              (file-name (git-file-name name version))
+              (sha256 (base32 "0abc..."))
+              (patches (search-patches "my-advanced-fix-fhs.patch"))
+              (snippet '(begin
+                          (substitute* "configure"
+                            (("/usr/bin/file") "file"))
+                          (delete-file "bundled/zlib.c")
+                          #t))
+              (modules '((guix build utils)))))
+    (build-system gnu-build-system)
+    (outputs '("out" "lib" "doc"))
+    (arguments
+     (list
+      #:configure-flags
+      #~(list "--enable-shared"
+              (string-append "--with-python="
+                             #$(this-package-input "python-wrapper"))
+              (string-append "--with-libdir="
+                             #$output:lib "/lib"))
+      #:make-flags
+      #~(list "CC=gcc"
+              "V=1"
+              (string-append "PREFIX=" #$output))
+      #:tests? #t
+      #:test-target "check"
+      #:parallel-build? #t
+      #:parallel-tests? #f
+      #:strip-binaries? #t
+      #:validate-runpath? #t
+      #:phases
+      #~(modify-phases %standard-phases
+          ;; The package has no configure script, so remove the phase.
+          (delete 'configure)
+          ;; This phase sets the PREFIX variable in the Makefile.
+          (add-before 'build 'set-prefix-in-makefile
+            (lambda* (#:key outputs #:allow-other-keys)
+              (substitute* "Makefile"
+                (("PREFIX =.*")
+                 (string-append "PREFIX = " #$output "\n")))
+              #t))
+          (add-after 'install 'install-manpage
+            (lambda* (#:key outputs #:allow-other-keys)
+              (install-file "my-advanced.1"
+                            (string-append (assoc-ref outputs "out")
+                                           "/share/man/man1"))))
+          (add-after 'install 'wrap
+            (lambda* (#:key inputs outputs #:allow-other-keys)
+              (let ((out (assoc-ref outputs "out"))
+                    (lib (assoc-ref outputs "lib"))
+                    (python (assoc-ref inputs "python-wrapper")))
+                (wrap-program (string-append out "/bin/my-advanced")
+                  `("PYTHONPATH" ":" prefix
+                    (,(string-append lib "/lib/python3.11/site-packages")
+                     ,(string-append python "/lib/python3.11/site-packages"))))))))))
+    (inputs (list python-wrapper glib libffi))
+    (native-inputs (list pkg-config gettext autoconf automake libtool))
+    (propagated-inputs (list python-requests))
+    (native-search-paths
+     (list (search-path-specification
+            (variable "MY_ADVANCED_PATH")
+            (files '("share/my-advanced")))))
+    (search-paths
+     (list (search-path-specification
+            (variable "PYTHONPATH")
+            (files '("lib/python3.11/site-packages")))))
+    (home-page "https://example.com/my-advanced")
+    (synopsis "An advanced example package")
+    (description "This is an advanced example package that demonstrates
+inheritance, G-expressions, multiple outputs, FHS avoidance, Python
+integration, custom build phases, and search paths.")
+    (license (list license:gpl3+ license:lgpl3+))
+    (properties '((upstream-name . "my-advanced")
+                  (release-monitoring-url . "https://example.com/releases")
+                  (max-silent-time . 3600)))
+    (replacements (list my-advanced-fixed))))
+```
+
+
+## Appendix B: Glossary
+
+- **Bag**: An intermediate representation between a package and a derivation, introduced with the `lower` API for build systems.
+- **Build System**: A `<build-system>` record that encapsulates the procedure for building a package, including implicit dependencies and phases.
+- **Channel**: A Git repository containing package definitions, used to distribute packages outside of Guix proper.
+- **Cross-Compilation**: Building for a foreign architecture using a cross-compiler that runs on the host but produces target binaries.
+- **Derivation**: A low-level build recipe, stored in `/gnu/store/*.drv`.
+- **G-exp**: A staged expression, written `#~(...)`, that produces a derivation.
+- **Graft**: A mechanism for replacing a package with a fixed version without rebuilding dependents.
+- **Implicit inputs**: Inputs added automatically by a build system.
+- **JLLWrappers**: A Julia package that creates wrapper modules for binary libraries.
+- **Manifest**: A Scheme file declaratively specifying a collection of packages.
+- **Native Building**: Building for a foreign architecture by emulating the target CPU (e.g., with QEMU).
+- **Output**: A named result of a build (e.g., `out`, `lib`, `doc`).
+- **Pack**: A standalone binary bundle created by `guix pack`, usable without Guix.
+- **Phase**: A step in the build process (e.g., `configure`, `build`, `install`).
+- **Profile**: A user environment, created by `guix package` or `guix shell`.
+- **Replacements**: The field in a package record that declares graftable replacements.
+- **Search path**: An environment variable set from the subdirectories of packages in the environment.
+- **Store**: The immutable `/gnu/store` directory.
+- **Substitute**: A pre-built binary downloaded from a server.
+- **System**: A platform tuple (e.g., `x86_64-linux`).
+- **Target**: The platform for which a package is built during cross-compilation.
+- **Thunked field**: A package field whose value is evaluated lazily (at access time rather than at package definition time). The `arguments`, `inputs`, `native-inputs`, `propagated-inputs`, and `replacement` fields are thunked.
+- **Transformation**: A package rewrite, such as `--with-input` or `--with-graft`, implemented via `options->transformation`.
+- **Tunable Package**: A package with the `tunable?` property set, eligible for CPU-specific optimization via `--tune`.
+
+---
